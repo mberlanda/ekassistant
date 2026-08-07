@@ -14,6 +14,12 @@ FINANCE_CHUNK = IndexedChunk(
     text="Submit expense reports within thirty days of purchase.",
     allowed_groups=["finance"],
 )
+MULTI_GROUP_CHUNK = IndexedChunk(
+    chunk_id="c3",
+    source="launch-plan.md",
+    text="Coordinate the product launch rollout across regions.",
+    allowed_groups=["engineering", "product"],
+)
 
 
 def _make_index(tmp_path) -> SqliteKeywordIndex:
@@ -81,6 +87,30 @@ def test_delete_propagates_so_the_chunk_no_longer_matches(tmp_path):
     index.delete(ENGINEERING_CHUNK.chunk_id)
 
     results = index.search("deploy pipeline", allowed_groups=["engineering"], top_n=10)
+
+    assert results == []
+
+
+def test_partial_group_overlap_is_enough_to_see_a_multi_group_chunk(tmp_path):
+    # Caller belongs to {marketing, product}; the chunk is allowed to
+    # {engineering, product}. Only "product" overlaps - that must be
+    # enough (OR semantics across groups), not require every group to
+    # match (that would be a silent, severe over-restriction bug).
+    index = _make_index(tmp_path)
+    index.upsert(MULTI_GROUP_CHUNK)
+
+    results = index.search(
+        "product launch", allowed_groups=["marketing", "product"], top_n=10
+    )
+
+    assert [r.chunk_id for r in results] == [MULTI_GROUP_CHUNK.chunk_id]
+
+
+def test_no_group_overlap_at_all_excludes_a_multi_group_chunk(tmp_path):
+    index = _make_index(tmp_path)
+    index.upsert(MULTI_GROUP_CHUNK)
+
+    results = index.search("product launch", allowed_groups=["marketing", "sales"], top_n=10)
 
     assert results == []
 

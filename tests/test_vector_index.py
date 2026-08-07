@@ -36,6 +36,12 @@ FINANCE_CHUNK = IndexedChunk(
     text="expense report policy",
     allowed_groups=["finance"],
 )
+MULTI_GROUP_CHUNK = IndexedChunk(
+    chunk_id="c3",
+    source="launch-plan.md",
+    text="product launch rollout plan",
+    allowed_groups=["engineering", "product"],
+)
 # Both chunks embed near-identically so ACL filtering, not vector distance,
 # is what determines whether a result comes back.
 EMBEDDING = [0.1, 0.2, 0.3, 0.4]
@@ -98,6 +104,26 @@ def test_delete_propagates_so_the_chunk_no_longer_matches(vector_index):
     vector_index.delete(ENGINEERING_CHUNK.chunk_id)
 
     results = vector_index.search(EMBEDDING, allowed_groups=["engineering"], top_n=10)
+
+    assert results == []
+
+
+def test_partial_group_overlap_is_enough_to_see_a_multi_group_chunk(vector_index):
+    # Caller belongs to {marketing, product}; the chunk is allowed to
+    # {engineering, product}. Only "product" overlaps - that must be
+    # enough (OR semantics across groups via MatchAny), not require every
+    # group to match.
+    vector_index.upsert(MULTI_GROUP_CHUNK, EMBEDDING)
+
+    results = vector_index.search(EMBEDDING, allowed_groups=["marketing", "product"], top_n=10)
+
+    assert [r.chunk_id for r in results] == [MULTI_GROUP_CHUNK.chunk_id]
+
+
+def test_no_group_overlap_at_all_excludes_a_multi_group_chunk(vector_index):
+    vector_index.upsert(MULTI_GROUP_CHUNK, EMBEDDING)
+
+    results = vector_index.search(EMBEDDING, allowed_groups=["marketing", "sales"], top_n=10)
 
     assert results == []
 
