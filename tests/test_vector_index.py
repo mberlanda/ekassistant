@@ -135,3 +135,35 @@ def test_ensure_collection_is_idempotent(vector_index):
 
 def test_delete_of_never_upserted_chunk_does_not_raise(vector_index):
     vector_index.delete("does-not-exist")
+
+
+def test_chunk_ids_for_source_returns_only_that_sources_chunks(vector_index):
+    vector_index.upsert(ENGINEERING_CHUNK, EMBEDDING)
+    vector_index.upsert(FINANCE_CHUNK, EMBEDDING)
+
+    assert vector_index.chunk_ids_for_source("runbook.md") == {ENGINEERING_CHUNK.chunk_id}
+    assert vector_index.chunk_ids_for_source("no-such-source.md") == set()
+
+
+def test_all_sources_returns_the_distinct_set_of_indexed_sources(vector_index):
+    vector_index.upsert(ENGINEERING_CHUNK, EMBEDDING)
+    vector_index.upsert(FINANCE_CHUNK, EMBEDDING)
+
+    assert vector_index.all_sources() == {"runbook.md", "expenses.md"}
+
+
+def test_chunk_ids_for_source_paginates_past_a_single_scroll_page(vector_index):
+    # _scroll_all() pages through Qdrant's scroll() in batches of 256 -
+    # this exercises the multi-page loop itself (offset handling, no
+    # missed/duplicated records), not just the trivial single-page case
+    # every other test here happens to hit.
+    expected_chunk_ids = set()
+    for i in range(300):
+        chunk = IndexedChunk(
+            chunk_id=f"many.md#{i}", source="many.md", text="x", allowed_groups=["engineering"]
+        )
+        vector_index.upsert(chunk, EMBEDDING)
+        expected_chunk_ids.add(chunk.chunk_id)
+
+    assert vector_index.chunk_ids_for_source("many.md") == expected_chunk_ids
+    assert vector_index.all_sources() == {"many.md"}

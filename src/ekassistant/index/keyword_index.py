@@ -83,6 +83,16 @@ class SqliteKeywordIndex:
         self._conn.execute("DELETE FROM chunks_fts WHERE chunk_id = ?", (chunk_id,))
         self._conn.execute("DELETE FROM chunk_groups WHERE chunk_id = ?", (chunk_id,))
 
+    def chunk_ids_for_source(self, source: str) -> set[str]:
+        rows = self._conn.execute(
+            "SELECT chunk_id FROM chunks_fts WHERE source = ?", (source,)
+        ).fetchall()
+        return {row[0] for row in rows}
+
+    def all_sources(self) -> set[str]:
+        rows = self._conn.execute("SELECT DISTINCT source FROM chunks_fts").fetchall()
+        return {row[0] for row in rows}
+
     def search(self, query_text: str, allowed_groups: list[str], top_n: int) -> list[SearchResult]:
         # Fail closed (docs/decisions/0002): no groups means nothing is
         # visible, full stop - don't even issue the query.

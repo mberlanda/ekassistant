@@ -124,6 +124,23 @@ def test_search_score_is_higher_is_better(tmp_path):
     assert results[0].score > 0
 
 
+def test_chunk_ids_for_source_returns_only_that_sources_chunks(tmp_path):
+    index = _make_index(tmp_path)
+    index.upsert(ENGINEERING_CHUNK)
+    index.upsert(FINANCE_CHUNK)
+
+    assert index.chunk_ids_for_source("runbook.md") == {ENGINEERING_CHUNK.chunk_id}
+    assert index.chunk_ids_for_source("no-such-source.md") == set()
+
+
+def test_all_sources_returns_the_distinct_set_of_indexed_sources(tmp_path):
+    index = _make_index(tmp_path)
+    index.upsert(ENGINEERING_CHUNK)
+    index.upsert(FINANCE_CHUNK)
+
+    assert index.all_sources() == {"runbook.md", "expenses.md"}
+
+
 def test_query_containing_fts5_operator_syntax_does_not_raise(tmp_path):
     index = _make_index(tmp_path)
     index.upsert(ENGINEERING_CHUNK)
