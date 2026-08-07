@@ -1,3 +1,5 @@
+import pytest
+
 from ekassistant.index.types import SearchResult
 from ekassistant.retrieval.rrf import reciprocal_rank_fusion
 
@@ -63,3 +65,15 @@ def test_different_k_values_both_produce_valid_fused_results():
     # both a smaller and the default k don't raise and produce both chunks.
     assert {r.chunk_id for r in fused_default} == {"a", "b"}
     assert {r.chunk_id for r in fused_small_k} == {"a", "b"}
+
+
+def test_k_zero_is_allowed_plain_reciprocal_rank():
+    fused = reciprocal_rank_fusion([[_hit("a")], []], k=0)
+
+    assert fused[0].chunk_id == "a"
+    assert fused[0].score == 1.0  # 1/(0+1)
+
+
+def test_negative_k_is_rejected_rather_than_silently_corrupting_scores():
+    with pytest.raises(ValueError, match="k must be >= 0"):
+        reciprocal_rank_fusion([[_hit("a")], []], k=-1)

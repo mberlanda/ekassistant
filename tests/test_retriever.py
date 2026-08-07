@@ -134,6 +134,46 @@ def test_retrieve_with_blank_question_returns_nothing_without_calling_embedder()
     assert embedder.embedded_queries == []
 
 
+def test_retrieve_propagates_embedder_errors_instead_of_swallowing_them():
+    class RaisingEmbedder:
+        def embed(self, text: str) -> list[float]:
+            raise ConnectionError("ollama is not reachable")
+
+    try:
+        retrieve(
+            "question",
+            ["engineering"],
+            RaisingEmbedder(),
+            FakeVectorIndex([]),
+            FakeKeywordIndex([]),
+            PassthroughReranker(),
+        )
+    except ConnectionError:
+        pass
+    else:
+        raise AssertionError("expected the embedder error to propagate")
+
+
+def test_retrieve_propagates_index_search_errors_instead_of_swallowing_them():
+    class RaisingVectorIndex:
+        def search(self, query_embedding, allowed_groups, top_n):
+            raise ConnectionError("qdrant is not reachable")
+
+    try:
+        retrieve(
+            "question",
+            ["engineering"],
+            FakeEmbedder(),
+            RaisingVectorIndex(),
+            FakeKeywordIndex([]),
+            PassthroughReranker(),
+        )
+    except ConnectionError:
+        pass
+    else:
+        raise AssertionError("expected the index search error to propagate")
+
+
 def test_retrieve_returns_context_chunks_not_raw_search_results():
     vector_index = FakeVectorIndex([_hit("a")])
     keyword_index = FakeKeywordIndex([])

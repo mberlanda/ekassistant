@@ -25,4 +25,8 @@ class PassthroughReranker:
     def rerank(
         self, query: str, candidates: list[SearchResult], top_k: int
     ) -> list[SearchResult]:
-        return candidates[:top_k]
+        # max(top_k, 0): a plain `candidates[:top_k]` would silently return
+        # almost the whole list for a negative top_k (Python slice
+        # semantics), rather than the "give me nothing" a caller passing
+        # a negative count almost certainly meant.
+        return candidates[: max(top_k, 0)]

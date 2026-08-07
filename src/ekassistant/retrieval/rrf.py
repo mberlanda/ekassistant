@@ -14,6 +14,16 @@ _DEFAULT_K = 60  # the standard default from the original RRF paper
 def reciprocal_rank_fusion(
     result_lists: list[list[SearchResult]], k: int = _DEFAULT_K
 ) -> list[SearchResult]:
+    if k < 0:
+        # rank starts at 1 and only increases, so k=0 is safe (equivalent
+        # to plain, unsmoothed reciprocal-rank scoring: 1/rank) - but a
+        # negative k is a real hazard, not just a crash risk: for a list
+        # shorter than |k|, every rank stays below |k| and (k + rank)
+        # never hits zero, so instead of a ZeroDivisionError this would
+        # silently produce NEGATIVE score contributions for being ranked
+        # highly, corrupting the fused order without ever raising.
+        raise ValueError(f"k must be >= 0, got {k}")
+
     scores: dict[str, float] = {}
     # setdefault: the first list a chunk_id is seen in (result_lists[0],
     # conventionally the dense/vector hits - see retriever.py's call site)

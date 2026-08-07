@@ -59,6 +59,10 @@ def retrieve(
         return []
 
     query_embedding = embed_client.embed(query)
+    # Sequential, not concurrent, despite docs/design/retrieval.md's
+    # diagram showing dense/keyword search as parallel branches - a
+    # latency-only simplification for V1's synchronous call stack.
+    # Revisit if profiling shows this pair of calls dominates request time.
     dense_hits = vector_index.search(query_embedding, allowed_groups, candidate_top_n)
     keyword_hits = keyword_index.search(query, allowed_groups, candidate_top_n)
 
