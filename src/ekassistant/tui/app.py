@@ -1,9 +1,8 @@
 """Terminal client (REPL).
 
-See docs/design/client-tui.md. This first version exercises the API
-Gateway's mock identity resolution end to end (`:user <id>` to switch,
-try `alice`, `bob`, `carol`, or `guest` - see config/identities.yaml).
-Question answering lands once retrieval + the model layer are wired, per
+See docs/design/client-tui.md. Mock identity resolution (`:user <id>` to
+switch, try `alice`, `bob`, `carol`, or `guest` - see
+config/identities.yaml) and question answering via POST /query, per
 docs/design/orchestration.md.
 """
 
@@ -42,11 +41,33 @@ def run() -> None:
                 console.print(f"Now [cyan]{user_id}[/cyan], groups: {groups or '(none)'}")
                 continue
 
-            console.print(
-                "[yellow]Question answering isn't wired up yet[/yellow] - "
-                "retrieval and the model layer land in a later commit. "
-                "See docs/design/orchestration.md for the plan."
-            )
+            _ask(client, user_id, line)
+
+
+def _ask(client: httpx.Client, user_id: str, question: str) -> None:
+    try:
+        # Longer timeout than the client default: local CPU model
+        # inference (see ADR-0004) is far slower than a health/whoami
+        # round trip, especially on a cold-started Ollama model.
+        response = client.post(
+            "/query",
+            json={"question": question},
+            headers={"X-User-Id": user_id},
+            timeout=120.0,
+        )
+        response.raise_for_status()
+    except httpx.HTTPError as error:
+        console.print(f"[red]Request to the API Gateway failed:[/red] {error}")
+        return
+
+    result = response.json()
+    if result["abstained"]:
+        console.print("[yellow]No grounded answer found in the accessible documents.[/yellow]")
+        return
+
+    console.print(result["answer"])
+    for citation in result["citations"]:
+        console.print(f"  [dim]- {citation['source']} ({citation['chunk_id']})[/dim]")
 
 
 if __name__ == "__main__":
