@@ -56,6 +56,18 @@ def test_html_parser_ignores_non_heading_non_paragraph_tags(tmp_path):
     assert "Keep this." in text
 
 
+def test_html_parser_keeps_a_space_around_nested_inline_tags(tmp_path):
+    path = tmp_path / "doc.html"
+    path.write_text(
+        '<html><body><p>Contact <a href="x">the on-call engineer</a>immediately.</p>'
+        "</body></html>"
+    )
+
+    text = parse_html(path)
+
+    assert text == "Contact the on-call engineer immediately."
+
+
 def test_html_parser_skips_empty_tags(tmp_path):
     path = tmp_path / "doc.html"
     path.write_text("<html><body><h2>   </h2><p>Real content.</p></body></html>")

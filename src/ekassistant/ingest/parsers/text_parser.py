@@ -9,4 +9,6 @@ from pathlib import Path
 
 
 def parse(path: Path) -> str:
-    return path.read_text()
+    # Explicit encoding: read_text()'s default is locale-dependent, not
+    # guaranteed UTF-8 across every environment this might run in.
+    return path.read_text(encoding="utf-8")
