@@ -23,3 +23,11 @@ class IdentityStore:
 
     def groups_for(self, user_id: str) -> list[str]:
         return self._groups_by_user.get(user_id, [])
+
+    def all_user_ids(self) -> list[str]:
+        """Every user_id known to this lookup table - used by the eval
+        harness (docs/design/observability.md) to build ACL test cases
+        across every mock user, not a set hardcoded separately from
+        config/identities.yaml.
+        """
+        return list(self._groups_by_user)

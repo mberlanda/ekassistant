@@ -1,4 +1,4 @@
-.PHONY: venv install lint test up down api tui models ingest
+.PHONY: venv install lint test up down api tui models ingest eval
 
 PYENV_VERSION := $(shell cat .python-version)
 PYTHON := $(HOME)/.pyenv/versions/$(PYENV_VERSION)/bin/python
@@ -35,3 +35,6 @@ models:
 
 ingest:
 	.venv/bin/ekassistant-ingest
+
+eval:
+	.venv/bin/ekassistant-eval

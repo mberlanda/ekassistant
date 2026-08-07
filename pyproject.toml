@@ -36,6 +36,7 @@ dev = [
 ekassistant-api = "ekassistant.api.main:run"
 ekassistant-tui = "ekassistant.tui.app:run"
 ekassistant-ingest = "ekassistant.ingest.cli:run"
+ekassistant-eval = "ekassistant.observability.eval_cli:run"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/ekassistant"]

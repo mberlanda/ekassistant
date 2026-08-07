@@ -39,6 +39,10 @@ class Settings(BaseSettings):
     seed_corpus_dir: Path = Path("./seed_corpus")
     seed_corpus_manifest: Path = Path("./seed_corpus/manifest.yaml")
 
+    # Observability (see docs/design/observability.md). Local, file-based
+    # for V1 - no tracing backend.
+    trace_log_path: Path = Path("./data/traces.jsonl")
+
 
 @lru_cache
 def get_settings() -> Settings:
