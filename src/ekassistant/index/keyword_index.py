@@ -43,6 +43,12 @@ def _to_match_query(text: str) -> str | None:
 
 
 class SqliteKeywordIndex:
+    # sqlite3 connections are only usable from the thread that created them
+    # (check_same_thread defaults to True). Fine for the single-threaded
+    # ingest/test usage in this PR; whichever later PR wires this into the
+    # (likely multi-threaded) API Gateway needs to either open one
+    # connection per call or per request, not share this instance across
+    # threads as-is.
     def __init__(self, settings: Settings):
         path = Path(settings.keyword_index_path)
         path.parent.mkdir(parents=True, exist_ok=True)
@@ -54,8 +60,12 @@ class SqliteKeywordIndex:
         self._conn.close()
 
     def upsert(self, chunk: IndexedChunk) -> None:
-        self.delete(chunk.chunk_id)
+        # Delete-then-insert in one transaction, not by calling delete()
+        # (which commits on its own): two separate commits would leave a
+        # window where a re-ingested chunk is transiently absent between
+        # them if a search runs in between.
         with self._conn:
+            self._delete_within_transaction(chunk.chunk_id)
             self._conn.execute(
                 "INSERT INTO chunks_fts(chunk_id, source, body) VALUES (?, ?, ?)",
                 (chunk.chunk_id, chunk.source, chunk.text),
@@ -67,8 +77,11 @@ class SqliteKeywordIndex:
 
     def delete(self, chunk_id: str) -> None:
         with self._conn:
-            self._conn.execute("DELETE FROM chunks_fts WHERE chunk_id = ?", (chunk_id,))
-            self._conn.execute("DELETE FROM chunk_groups WHERE chunk_id = ?", (chunk_id,))
+            self._delete_within_transaction(chunk_id)
+
+    def _delete_within_transaction(self, chunk_id: str) -> None:
+        self._conn.execute("DELETE FROM chunks_fts WHERE chunk_id = ?", (chunk_id,))
+        self._conn.execute("DELETE FROM chunk_groups WHERE chunk_id = ?", (chunk_id,))
 
     def search(self, query_text: str, allowed_groups: list[str], top_n: int) -> list[SearchResult]:
         # Fail closed (docs/decisions/0002): no groups means nothing is

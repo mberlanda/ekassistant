@@ -58,6 +58,23 @@ def test_upsert_is_idempotent_not_duplicating_on_re_ingest(tmp_path):
     assert len(results) == 1
 
 
+def test_upsert_of_existing_chunk_replaces_text_and_group_membership(tmp_path):
+    index = _make_index(tmp_path)
+    index.upsert(ENGINEERING_CHUNK)
+
+    updated = IndexedChunk(
+        chunk_id=ENGINEERING_CHUNK.chunk_id,
+        source=ENGINEERING_CHUNK.source,
+        text="Escalate to the on-call rotation via the incident tool.",
+        allowed_groups=["finance"],
+    )
+    index.upsert(updated)
+
+    assert index.search("deploy pipeline", allowed_groups=["engineering"], top_n=10) == []
+    finance_results = index.search("on-call rotation", allowed_groups=["finance"], top_n=10)
+    assert [r.chunk_id for r in finance_results] == [ENGINEERING_CHUNK.chunk_id]
+
+
 def test_delete_propagates_so_the_chunk_no_longer_matches(tmp_path):
     index = _make_index(tmp_path)
     index.upsert(ENGINEERING_CHUNK)
