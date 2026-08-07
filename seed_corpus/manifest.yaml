@@ -1,18 +1,33 @@
 # Tiny hand-written corpus for the end-to-end ingest -> retrieval -> answer
-# proof of concept (docs/design/ingest.md, roadmap item 3). Maps each
-# document to its Access Control List, matching config/identities.yaml's
-# groups so the ACL boundary is demonstrable out of the box: alice sees
-# oncall-runbook + the all-staff doc, bob sees support-escalation-macros +
-# the all-staff doc, carol sees expense-approval-policy + the all-staff
-# doc, guest sees nothing.
+# proof of concept (docs/design/ingest.md, roadmap items 3-4). Every
+# document is original content authored for this project, spanning every
+# format the ingest pipeline parses (.md, .html, .pdf, .docx) - see
+# docs/decisions/0009-ingest-format-adapters.md for why hand-authored
+# fixtures were chosen over a downloaded public corpus.
+#
+# Maps each document to its Access Control List, matching
+# config/identities.yaml's groups so the ACL boundary is demonstrable out
+# of the box: alice sees the two engineering docs (Markdown + HTML) plus
+# the all-staff doc, bob sees the two support docs (Markdown + DOCX) plus
+# the all-staff doc, carol sees the two finance docs (Markdown + PDF) plus
+# the all-staff doc, guest sees nothing.
 
 oncall-runbook.md:
+  allowed_groups: [engineering]
+
+engineering-onboarding.html:
   allowed_groups: [engineering]
 
 expense-approval-policy.md:
   allowed_groups: [finance]
 
+vendor-contract-terms.pdf:
+  allowed_groups: [finance]
+
 support-escalation-macros.md:
+  allowed_groups: [support]
+
+customer-escalation-policy.docx:
   allowed_groups: [support]
 
 remote-access-vpn-policy.md:

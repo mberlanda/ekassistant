@@ -1,16 +1,19 @@
 """Local filesystem connector.
 
 See docs/design/ingest.md: each connector implements one interface so
-parsing, chunking, embedding, and index writing are shared code across
-every source. This one reads a manifest-described set of local files -
-first used for the seed corpus (docs/roadmap.md item 3), reusable later
-for a real share-drive-style source.
+chunking, embedding, and index writing are shared code across every
+source. This one reads a manifest-described set of local files, dispatching
+each to its format-specific parser (see ekassistant.ingest.parsers) by file
+extension - first used for the seed corpus (docs/roadmap.md item 3),
+reusable later for a real share-drive-style source.
 """
 
 from dataclasses import dataclass
 from pathlib import Path
 
 import yaml
+
+from ekassistant.ingest.parsers import parse_document
 
 
 @dataclass(frozen=True)
@@ -30,7 +33,7 @@ class FilesystemConnector:
         manifest = yaml.safe_load(self._manifest_path.read_text()) or {}
         documents = []
         for filename, meta in manifest.items():
-            text = (self._corpus_dir / filename).read_text()
+            text = parse_document(self._corpus_dir / filename)
             documents.append(
                 Document(
                     doc_id=filename,
