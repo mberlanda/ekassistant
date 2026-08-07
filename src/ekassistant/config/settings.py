@@ -33,6 +33,12 @@ class Settings(BaseSettings):
     identities_path: Path = Path("./config/identities.yaml")
     default_user: str = "guest"
 
+    # Ingest (see docs/design/ingest.md). The seed corpus is a tiny
+    # hand-written fixture set for the end-to-end proof of concept, not a
+    # real source connector - see roadmap.md item 3.
+    seed_corpus_dir: Path = Path("./seed_corpus")
+    seed_corpus_manifest: Path = Path("./seed_corpus/manifest.yaml")
+
 
 @lru_cache
 def get_settings() -> Settings:
