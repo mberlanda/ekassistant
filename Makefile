@@ -1,4 +1,4 @@
-.PHONY: venv install lint test up down api tui models
+.PHONY: venv install lint test up down api tui models ingest
 
 PYENV_VERSION := $(shell cat .python-version)
 PYTHON := $(HOME)/.pyenv/versions/$(PYENV_VERSION)/bin/python
@@ -32,3 +32,6 @@ tui:
 models:
 	ollama pull llama3.2:1b
 	ollama pull nomic-embed-text
+
+ingest:
+	.venv/bin/ekassistant-ingest

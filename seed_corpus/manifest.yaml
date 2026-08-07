@@ -1,0 +1,19 @@
+# Tiny hand-written corpus for the end-to-end ingest -> retrieval -> answer
+# proof of concept (docs/design/ingest.md, roadmap item 3). Maps each
+# document to its Access Control List, matching config/identities.yaml's
+# groups so the ACL boundary is demonstrable out of the box: alice sees
+# oncall-runbook + the all-staff doc, bob sees support-escalation-macros +
+# the all-staff doc, carol sees expense-approval-policy + the all-staff
+# doc, guest sees nothing.
+
+oncall-runbook.md:
+  allowed_groups: [engineering]
+
+expense-approval-policy.md:
+  allowed_groups: [finance]
+
+support-escalation-macros.md:
+  allowed_groups: [support]
+
+remote-access-vpn-policy.md:
+  allowed_groups: [all-staff]
