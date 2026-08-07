@@ -63,3 +63,11 @@ def test_model_reported_abstain_is_normalized():
     assert result.abstained is True
     assert result.answer == ""
     assert result.citations == []
+
+
+def test_mutating_one_abstain_result_does_not_affect_the_next():
+    client = FakeChatClient(response="not valid json at all")
+    first = generate_answer("q1", CONTEXT, client)
+    first.citations.append(object())  # simulate a careless caller mutating it
+    second = generate_answer("q2", CONTEXT, client)
+    assert second.citations == []

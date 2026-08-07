@@ -10,12 +10,14 @@ class FakeUnderlyingClient:
         self.embed_calls: list[dict] = []
         self.chat_calls: list[dict] = []
 
-    def embed(self, model: str, input):  # noqa: A002 - matches ollama.Client's signature
+    # Parameter names intentionally match ollama.Client's own signature
+    # (input/format shadow builtins) so this fake is a drop-in substitute.
+    def embed(self, model: str, input):
         self.embed_calls.append({"model": model, "input": input})
         texts = input if isinstance(input, list) else [input]
         return {"embeddings": [[0.1, 0.2] for _ in texts]}
 
-    def chat(self, model: str, messages, format):  # noqa: A002 - matches ollama.Client's signature
+    def chat(self, model: str, messages, format):
         self.chat_calls.append({"model": model, "messages": messages, "format": format})
         return {"message": {"content": '{"answer": "", "citations": [], "abstained": true}'}}
 

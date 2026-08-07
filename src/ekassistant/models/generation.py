@@ -23,7 +23,12 @@ SYSTEM_PROMPT = (
     "that is not present in the provided context."
 )
 
-_ABSTAIN = GroundedAnswer(answer="", citations=[], abstained=True)
+
+def _abstain() -> GroundedAnswer:
+    # A fresh instance every call: GroundedAnswer.citations is a mutable
+    # list, so a shared module-level instance would let one caller's
+    # mutation corrupt every other abstain response.
+    return GroundedAnswer(answer="", citations=[], abstained=True)
 
 
 class ChatClient(Protocol):
@@ -38,7 +43,7 @@ def generate_answer(
     question: str, context_chunks: list[ContextChunk], client: ChatClient
 ) -> GroundedAnswer:
     if not context_chunks:
-        return _ABSTAIN
+        return _abstain()
 
     user_prompt = f"Context:\n{_format_context(context_chunks)}\n\nQuestion: {question}"
     raw = client.chat_json(SYSTEM_PROMPT, user_prompt, GroundedAnswer.model_json_schema())
@@ -46,7 +51,7 @@ def generate_answer(
     try:
         candidate = GroundedAnswer.model_validate_json(raw)
     except ValidationError:
-        return _ABSTAIN
+        return _abstain()
 
     return _validate_citations(candidate, context_chunks)
 
@@ -55,12 +60,12 @@ def _validate_citations(
     candidate: GroundedAnswer, context_chunks: list[ContextChunk]
 ) -> GroundedAnswer:
     if candidate.abstained:
-        return _ABSTAIN
+        return _abstain()
 
     valid_chunk_ids = {c.chunk_id for c in context_chunks}
     if not candidate.citations:
-        return _ABSTAIN
+        return _abstain()
     if any(citation.chunk_id not in valid_chunk_ids for citation in candidate.citations):
-        return _ABSTAIN
+        return _abstain()
 
     return candidate

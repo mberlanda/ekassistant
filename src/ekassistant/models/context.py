@@ -1,7 +1,7 @@
 """Context chunks handed to the model layer for grounding.
 
-See docs/design/retrieval.md#assemble-context (the retrieval pipeline
-produces these; the model layer only consumes them).
+See docs/design/retrieval.md (the retrieval pipeline produces these,
+in its "assemble context" step; the model layer only consumes them).
 """
 
 from dataclasses import dataclass
