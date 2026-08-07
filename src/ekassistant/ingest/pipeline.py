@@ -32,11 +32,13 @@ that drift rather than only ever detecting it from one side. See
 tests/test_ingest_pipeline.py (mocked) and tests/test_governance.py (live,
 against real Qdrant + SQLite) for the exact behavior.
 
-Cost note: this means every ingest run does a full scan per source (plus
-one full-collection scan for the removed-source check), which is fine at
-this project's seed_corpus scale but wouldn't be for a large, frequently
-re-ingested corpus - a stored high-water-mark/known-chunk-id-set per
-source would avoid the repeated scans if that becomes a real cost.
+Cost note: this means every ingest run does a filtered scan per source
+(via chunk_ids_for_source, on every document) plus one more full-collection
+scan per index for the removed-source check (via all_sources, once per
+run) - which is fine at this project's seed_corpus scale but wouldn't be
+for a large, frequently re-ingested corpus - a stored high-water-mark/
+known-chunk-id-set per source would avoid the repeated scans if that
+becomes a real cost.
 """
 
 from typing import Protocol
