@@ -1,4 +1,5 @@
 from ekassistant.index.types import IndexedChunk
+from ekassistant.ingest.connectors.composite import CompositeConnector
 from ekassistant.ingest.connectors.filesystem import Document
 from ekassistant.ingest.pipeline import run_ingest
 
@@ -189,4 +190,66 @@ def test_stale_chunk_only_present_in_one_index_is_still_deleted_from_both():
     )
 
     assert "a.md#5" not in vector_index.by_chunk_id
+    assert set(vector_index.by_chunk_id) == {"a.md#0"}
+
+
+def test_two_separate_run_ingest_calls_sharing_indexes_wipe_the_first_connectors_content():
+    """Documents a real gotcha discovered live while adding a second
+    connector (the web crawler) alongside FilesystemConnector: run_ingest()
+    treats its connector's output as the COMPLETE set of currently-live
+    sources for this run, and deletes anything indexed but not in that set
+    (delete-propagation, see the module docstring). Calling it twice
+    against the SAME indexes - once per connector - breaks that contract:
+    the second call's connector has no way to know about the first
+    connector's sources, so they look removed and get deleted. This is why
+    ingest/cli.py combines every connector via CompositeConnector into ONE
+    run_ingest() call instead - see the next test and composite.py.
+    """
+    vector_index = FakeVectorIndex()
+    keyword_index = FakeKeywordIndex()
+
+    run_ingest(
+        FakeConnector([Document("a.md", "a.md", "From connector A.", ["eng"])]),
+        FakeEmbedder(),
+        vector_index,
+        keyword_index,
+    )
+    assert set(vector_index.by_chunk_id) == {"a.md#0"}
+
+    # A second, unrelated connector's run against the same indexes - it
+    # legitimately has nothing to report, but that's indistinguishable
+    # from "everything else was removed" from run_ingest()'s point of view.
+    run_ingest(FakeConnector([]), FakeEmbedder(), vector_index, keyword_index)
+
+    assert vector_index.by_chunk_id == {}
+
+
+def test_composite_connector_lets_two_connectors_share_indexes_safely():
+    """The fix/correct usage for the gotcha above: combine every connector
+    via CompositeConnector and call run_ingest() once, so the "currently
+    live sources" set run_ingest() diffs against is the true union across
+    every connector, not just one.
+    """
+    vector_index = FakeVectorIndex()
+    keyword_index = FakeKeywordIndex()
+
+    connector_a = FakeConnector([Document("a.md", "a.md", "From connector A.", ["eng"])])
+    connector_b = FakeConnector([Document("b.md", "b.md", "From connector B.", ["finance"])])
+    run_ingest(
+        CompositeConnector([connector_a, connector_b]),
+        FakeEmbedder(),
+        vector_index,
+        keyword_index,
+    )
+    assert set(vector_index.by_chunk_id) == {"a.md#0", "b.md#0"}
+
+    # Connector B now reports nothing (e.g. its one document was removed
+    # upstream) - only b.md's chunks should go, a.md's must survive.
+    run_ingest(
+        CompositeConnector([connector_a, FakeConnector([])]),
+        FakeEmbedder(),
+        vector_index,
+        keyword_index,
+    )
+
     assert set(vector_index.by_chunk_id) == {"a.md#0"}

@@ -39,13 +39,25 @@ run) - which is fine at this project's seed_corpus scale but wouldn't be
 for a large, frequently re-ingested corpus - a stored high-water-mark/
 known-chunk-id-set per source would avoid the repeated scans if that
 becomes a real cost.
+
+MULTI-CONNECTOR CONTRACT: a connector's load_documents() output is treated
+as the COMPLETE set of currently-live sources for this run - anything
+indexed but absent from it is deleted (see above). If multiple connectors
+share the same indexes (e.g. FilesystemConnector + WebCrawlerConnector,
+docs/decisions/0010-web-crawler-connector.md), calling run_ingest() once
+per connector breaks this: each call only knows about its own connector's
+sources, so the other connector's content looks removed and gets deleted.
+Combine every connector via `ingest.connectors.composite.CompositeConnector`
+and call run_ingest() exactly once - see
+tests/test_ingest_pipeline.py::test_two_separate_run_ingest_calls_sharing_indexes_wipe_the_first_connectors_content
+for the failure mode this avoids.
 """
 
 from typing import Protocol
 
 from ekassistant.index.types import IndexedChunk
 from ekassistant.ingest.chunker import chunk_document
-from ekassistant.ingest.connectors.filesystem import Document
+from ekassistant.ingest.connectors.document import Document
 from ekassistant.models.embedder import Embedder
 
 

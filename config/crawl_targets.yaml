@@ -1,0 +1,29 @@
+# Web crawler targets. See docs/decisions/0010-web-crawler-connector.md.
+#
+# Empty by default - no domain is baked into the connector itself. Add an
+# entry to have `ekassistant-ingest` crawl it. An unmapped domain is never
+# fetched at all (fail-closed, matching every other source's ACL model).
+#
+# Each entry:
+#   seed_url:       the page to start from
+#   allowed_groups: which config/identities.yaml groups may see this
+#                    content once ingested (required, no default)
+#   mode:            "single_page" (default) fetches only seed_url and
+#                    follows no links; "same_origin" BFS-crawls links from
+#                    seed_url, restricted to the same scheme+host+port,
+#                    bounded by the two fields below
+#   max_depth:       (same_origin only, required) how many link-hops from
+#                    seed_url to follow
+#   max_pages:       (same_origin only, required) hard cap on pages fetched
+#
+# Example (commented out):
+#
+# - seed_url: "https://docs.example.com/handbook/intro"
+#   allowed_groups: [engineering]
+#   mode: single_page
+#
+# - seed_url: "https://docs.example.com/handbook/"
+#   allowed_groups: [engineering]
+#   mode: same_origin
+#   max_depth: 2
+#   max_pages: 50
