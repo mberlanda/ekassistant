@@ -39,6 +39,10 @@ class Settings(BaseSettings):
     seed_corpus_dir: Path = Path("./seed_corpus")
     seed_corpus_manifest: Path = Path("./seed_corpus/manifest.yaml")
 
+    # Web crawler connector (see docs/decisions/0010). Empty by default -
+    # no domain is baked into the code, see ADR-0010.
+    crawl_targets_path: Path = Path("./config/crawl_targets.yaml")
+
     # Observability (see docs/design/observability.md). Local, file-based
     # for V1 - no tracing backend.
     trace_log_path: Path = Path("./data/traces.jsonl")

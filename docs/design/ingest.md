@@ -48,6 +48,35 @@ Each connector implements one interface (`list_documents`,
 chunking, embedding, and writing are shared code across every source —
 only the connector is source-specific.
 
+### Web crawler connector
+
+See [ADR-0010](../decisions/0010-web-crawler-connector.md) for the full
+decision record. `WebCrawlerConnector` implements the same
+`DocumentSource` interface as `FilesystemConnector` (`load_documents()`),
+so it's a second, drop-in source for `run_ingest` - chunking, embedding,
+indexing, and delete-propagation are unaffected.
+
+```
+config/crawl_targets.yaml (seed URL -> allowed_groups + crawl mode)
+        |
+        v
+robots.txt check (per origin) --> HTTP fetch --> html_parser.parse_html()
+        |                                                |
+        | (same_origin mode only: follow same-origin     v
+        |  links, bounded by max_depth/max_pages)   Document(doc_id=url, ...)
+        v
+   next URL to fetch
+```
+
+Two crawl modes, chosen per target: `single_page` (default - fetch
+exactly the seed URL, follow nothing) and `same_origin` (opt-in - BFS
+same-origin links, hard-capped by `max_depth`/`max_pages`). Unlike every
+other source, crawled HTML carries no native ACL metadata, so
+`allowed_groups` is config-driven per target and fails closed (an
+unmapped domain is never fetched) - see ADR-0010 for why a single global
+default group was rejected. `config/crawl_targets.yaml` ships empty; no
+domain is baked into the connector itself.
+
 ## Tradeoffs
 
 - **Structure-aware chunking vs. fixed-size chunking**: fixed-size (e.g.

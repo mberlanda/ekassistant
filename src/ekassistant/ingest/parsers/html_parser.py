@@ -15,8 +15,12 @@ from ekassistant.ingest.parsers._shared import escape_accidental_heading
 _HEADING_TAGS = [f"h{level}" for level in range(1, 7)]
 
 
-def parse(path: Path) -> str:
-    soup = BeautifulSoup(path.read_text(encoding="utf-8"), "html.parser")
+def parse_html(html: str) -> str:
+    """Parses an HTML string directly - shared by parse() below (reads a
+    local file) and the web crawler connector (reads an HTTP response
+    body), which has no file on disk to read from.
+    """
+    soup = BeautifulSoup(html, "html.parser")
     lines = []
     for tag in soup.find_all([*_HEADING_TAGS, "p"]):
         # get_text(strip=True) with no separator concatenates adjacent
@@ -39,3 +43,7 @@ def parse(path: Path) -> str:
             # heading by chunker.py's _HEADING_RE.
             lines.append(escape_accidental_heading(text))
     return "\n\n".join(lines)
+
+
+def parse(path: Path) -> str:
+    return parse_html(path.read_text(encoding="utf-8"))

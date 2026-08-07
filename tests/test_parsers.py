@@ -8,6 +8,7 @@ from ekassistant.ingest.parsers import parse_document
 from ekassistant.ingest.parsers._shared import escape_accidental_heading
 from ekassistant.ingest.parsers.docx_parser import parse as parse_docx
 from ekassistant.ingest.parsers.html_parser import parse as parse_html
+from ekassistant.ingest.parsers.html_parser import parse_html as parse_html_string
 from ekassistant.ingest.parsers.pdf_parser import _escape_lines
 from ekassistant.ingest.parsers.pdf_parser import parse as parse_pdf
 from ekassistant.ingest.parsers.text_parser import parse as parse_text
@@ -93,6 +94,18 @@ def test_html_parser_skips_empty_tags(tmp_path):
     text = parse_html(path)
 
     assert text.strip() == "Real content."
+
+
+def test_parse_html_string_matches_parse_of_the_same_content(tmp_path):
+    # parse() (file-based, used by FilesystemConnector) and parse_html()
+    # (string-based, used by WebCrawlerConnector - crawled content arrives
+    # over HTTP, not from a file on disk) must produce identical output
+    # for identical markup, since they share the same extraction logic.
+    html = "<html><body><h1>Title</h1><p>Body text.</p></body></html>"
+    path = tmp_path / "doc.html"
+    path.write_text(html)
+
+    assert parse_html_string(html) == parse_html(path)
 
 
 def test_docx_parser_maps_heading_styles_to_hash_prefixes(tmp_path):
