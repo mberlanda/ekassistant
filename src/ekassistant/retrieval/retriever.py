@@ -6,18 +6,22 @@ context. ACL enforcement itself lives inside vector_index.search() and
 keyword_index.search() (see ADR-0002) - this function's only
 responsibility for it is to always pass the caller's real allowed_groups
 through, never to skip or default it.
+
+Errors from the embedder or either index search are intentionally NOT
+caught here and propagate to the caller - the same reasoning as
+generation.py's model-layer errors (see docs/design/model-layer.md):
+silently turning an infrastructure failure into an empty result set
+would misrepresent "the system is down" as "nothing relevant exists",
+which orchestration could otherwise mistake for a legitimate abstain.
 """
 
 from typing import Protocol
 
 from ekassistant.index.types import SearchResult
 from ekassistant.models.context import ContextChunk
+from ekassistant.models.embedder import Embedder
 from ekassistant.retrieval.reranker import Reranker
 from ekassistant.retrieval.rrf import reciprocal_rank_fusion
-
-
-class Embedder(Protocol):
-    def embed(self, text: str) -> list[float]: ...
 
 
 class VectorSearcher(Protocol):
