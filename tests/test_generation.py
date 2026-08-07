@@ -71,3 +71,42 @@ def test_mutating_one_abstain_result_does_not_affect_the_next():
     first.citations.append(object())  # simulate a careless caller mutating it
     second = generate_answer("q2", CONTEXT, client)
     assert second.citations == []
+
+
+def test_blank_answer_but_not_abstained_downgrades_to_abstain():
+    response = (
+        '{"answer": "", "citations": [{"chunk_id": "c1", "source": "policy.md"}], '
+        '"abstained": false}'
+    )
+    client = FakeChatClient(response)
+    result = generate_answer("does the vpn need mfa?", CONTEXT, client)
+    assert result.abstained is True
+
+
+def test_citation_source_is_rebuilt_from_context_not_trusted_from_the_model():
+    # A citation with a valid chunk_id but a source that doesn't match that
+    # chunk's real source in the provided context - the model may have
+    # echoed a fabricated or injected source label. The real source from
+    # CONTEXT must win, not whatever the model claimed.
+    response = (
+        '{"answer": "Yes.", '
+        '"citations": [{"chunk_id": "c1", "source": "attacker-controlled.md"}], '
+        '"abstained": false}'
+    )
+    client = FakeChatClient(response)
+    result = generate_answer("does the vpn need mfa?", CONTEXT, client)
+    assert result.abstained is False
+    assert result.citations[0].source == "policy.md"
+
+
+def test_underlying_client_error_propagates_instead_of_being_swallowed():
+    class RaisingChatClient:
+        def chat_json(self, system: str, user: str, json_schema: dict) -> str:
+            raise ConnectionError("ollama is not reachable")
+
+    try:
+        generate_answer("does the vpn need mfa?", CONTEXT, RaisingChatClient())
+    except ConnectionError:
+        pass
+    else:
+        raise AssertionError("expected the transport error to propagate")

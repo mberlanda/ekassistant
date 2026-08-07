@@ -5,8 +5,9 @@ from ekassistant.models.ollama_client import OllamaClient
 class FakeUnderlyingClient:
     """Stand-in for ollama.Client so tests never need a running Ollama server."""
 
-    def __init__(self, host: str):
+    def __init__(self, host: str, timeout: float | None = None):
         self.host = host
+        self.timeout = timeout
         self.embed_calls: list[dict] = []
         self.chat_calls: list[dict] = []
 
@@ -24,9 +25,19 @@ class FakeUnderlyingClient:
 
 def _make_client(monkeypatch) -> tuple[OllamaClient, FakeUnderlyingClient]:
     fake = FakeUnderlyingClient(host="unused")
-    monkeypatch.setattr("ekassistant.models.ollama_client.ollama.Client", lambda host: fake)
+
+    def fake_constructor(host, timeout=None):
+        fake.timeout = timeout
+        return fake
+
+    monkeypatch.setattr("ekassistant.models.ollama_client.ollama.Client", fake_constructor)
     settings = Settings(ollama_model="test-chat-model", ollama_embed_model="test-embed-model")
     return OllamaClient(settings), fake
+
+
+def test_client_is_constructed_with_a_request_timeout(monkeypatch):
+    _, fake = _make_client(monkeypatch)
+    assert fake.timeout is not None and fake.timeout > 0
 
 
 def test_embed_uses_configured_embed_model(monkeypatch):

@@ -8,10 +8,17 @@ import ollama
 
 from ekassistant.config.settings import Settings
 
+# Generous bound for local CPU inference on a small model (see ADR-0004) -
+# without this, ollama.Client defaults to no timeout at all, so a stuck or
+# still-loading local server would hang callers indefinitely.
+_REQUEST_TIMEOUT_SECONDS = 120.0
+
 
 class OllamaClient:
     def __init__(self, settings: Settings):
-        self._client = ollama.Client(host=settings.ollama_base_url)
+        self._client = ollama.Client(
+            host=settings.ollama_base_url, timeout=_REQUEST_TIMEOUT_SECONDS
+        )
         self._chat_model = settings.ollama_model
         self._embed_model = settings.ollama_embed_model
 
