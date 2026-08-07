@@ -23,12 +23,12 @@ directly.
 | `docker-compose.yml` (Qdrant) | [ADR-0005](decisions/0005-vector-and-keyword-store-choice.md) | Done, verified running |
 | Dev tooling (Makefile, ruff, pytest, `.env.example`) | — | Done |
 | Ollama models pulled (`llama3.2:1b`, `nomic-embed-text`) | [ADR-0004](decisions/0004-local-llm-serving-via-ollama.md), [ADR-0006](decisions/0006-embedding-model-choice.md) | Done locally (not something a PR tracks — a machine-local step) |
+| Model layer client (`OllamaClient`, `generate_answer` cite-or-abstain) | [docs/design/model-layer.md](design/model-layer.md), [ADR-0004](decisions/0004-local-llm-serving-via-ollama.md), [ADR-0006](decisions/0006-embedding-model-choice.md) | Done, tested, and verified live against the real pulled models ([PR #1](https://github.com/mberlanda/ekassistant/pull/1)). Citations are rebuilt from authoritative context, never trusted from the model's own output. Confirmed empirically: `llama3.2:1b` is exactly as unreliable as ADR-0004 predicted (inconsistent citations run-to-run, occasional wrong-but-structurally-valid answers) — the validation path correctly downgrades the invalid cases to abstain, but *answer correctness* on valid cases is a model-quality problem for the eval harness (item 8) to catch, not something this layer can fix |
 
 ## Not started
 
 | # | Component | Docs | Description | Status |
 |---|---|---|---|---|
-| 1 | Model layer client | [docs/design/model-layer.md](design/model-layer.md), [ADR-0004](decisions/0004-local-llm-serving-via-ollama.md), [ADR-0006](decisions/0006-embedding-model-choice.md) | Ollama-backed chat + embed functions; structured cite-or-abstain output schema and its validation | Not started |
 | 2 | Index adapters | [docs/design/retrieval.md](design/retrieval.md), [ADR-0005](decisions/0005-vector-and-keyword-store-choice.md) | Qdrant adapter (collection setup at 768 dims, upsert, ACL-payload-filtered search) and SQLite FTS5 adapter (schema, ACL columns, `bm25()` search) behind a shared port | Not started |
 | 3 | Ingest core + tiny seed corpus | [docs/design/ingest.md](design/ingest.md) | Connector/parser/chunker interfaces, ACL tagger, dual index writer, wired to a handful of hand-written fixture documents across 2+ ACL groups — the smallest possible slice that proves ingest → retrieval → answer end to end | Not started |
 | 4 | Ingest format adapters | [docs/design/ingest.md](design/ingest.md) | Parsers for `.txt`/Markdown, HTML, PDF, `.docx`, each with its own small sample doc; format choice and any sample-corpus licensing/provenance recorded in a new ADR | Not started |
