@@ -13,6 +13,7 @@ def _trace(**overrides) -> RunTrace:
         retrieval_ms=12.5,
         generation_ms=340.2,
         abstained=False,
+        abstain_reason=None,
         citation_count=1,
         chat_model="llama3.2:1b",
         embed_model="nomic-embed-text",
@@ -54,9 +55,24 @@ def test_recorded_trace_contains_the_fields_observability_design_asks_for(tmp_pa
     assert record["generation_ms"] == 340.2
     assert record["retrieved_chunk_ids"] == ["c1", "c2"]
     assert record["abstained"] is False
+    assert record["abstain_reason"] is None
     assert record["chat_model"] == "llama3.2:1b"
     assert record["embed_model"] == "nomic-embed-text"
     assert "timestamp" in record
+
+
+def test_abstain_reason_distinguishes_from_a_plain_abstain_rate(tmp_path):
+    # The whole point of adding abstain_reason: "abstain rate" and
+    # "citation-validation failure rate" are two distinct metrics per
+    # docs/design/observability.md, and a trace record needs to carry
+    # enough to compute both, not just a single collapsed boolean.
+    path = tmp_path / "traces.jsonl"
+
+    record_run(_trace(abstained=True, abstain_reason="invalid_citation"), path)
+
+    record = json.loads(path.read_text().splitlines()[0])
+    assert record["abstained"] is True
+    assert record["abstain_reason"] == "invalid_citation"
 
 
 def test_concurrent_writes_do_not_corrupt_or_lose_lines(tmp_path):

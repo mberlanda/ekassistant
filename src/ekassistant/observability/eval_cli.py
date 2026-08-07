@@ -29,6 +29,16 @@ def run() -> None:
 
     print("=== Tier 1: retrieval/ACL correctness (deterministic) ===")
     checks = build_retrieval_checks(settings.seed_corpus_manifest, identities)
+    if not checks:
+        # An empty check list would otherwise print "0/0 passed" and exit
+        # 0 - a silent no-op that looks identical to "everything passed".
+        # A mismatch between EVAL_QUERIES and seed_corpus/manifest.yaml
+        # (e.g. every source renamed) is exactly the kind of drift this
+        # harness exists to catch, not paper over.
+        raise SystemExit(
+            "No retrieval checks were built - EVAL_QUERIES and "
+            f"{settings.seed_corpus_manifest} have no overlapping sources."
+        )
     results = run_retrieval_checks(
         checks, identities, ollama_client, vector_index, keyword_index, reranker
     )
@@ -58,7 +68,8 @@ def run() -> None:
     print(f"  question: {question!r} (as alice)")
     print(f"  runs: {stats.runs}")
     print(f"  abstain rate: {stats.abstain_rate:.0%} ({stats.abstain_count}/{stats.runs})")
-    print(f"  citation-validation failures: {stats.citation_validation_failures}")
+    for reason, count in sorted(stats.abstain_reason_counts.items()):
+        print(f"    - {reason}: {count}")
     print(f"  avg retrieval latency: {stats.avg_retrieval_ms:.0f}ms")
     print(f"  avg generation latency: {stats.avg_generation_ms:.0f}ms")
 

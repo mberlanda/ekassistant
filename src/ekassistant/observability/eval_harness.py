@@ -129,7 +129,7 @@ def run_retrieval_checks(
 class GenerationStats:
     runs: int
     abstain_count: int
-    citation_validation_failures: int
+    abstain_reason_counts: dict[str, int]
     avg_retrieval_ms: float
     avg_generation_ms: float
 
@@ -149,7 +149,7 @@ def measure_generation(
     chat_client: ChatClient,
 ) -> GenerationStats:
     abstain_count = 0
-    citation_validation_failures = 0
+    abstain_reason_counts: dict[str, int] = {}
     retrieval_times: list[float] = []
     generation_times: list[float] = []
 
@@ -166,18 +166,23 @@ def measure_generation(
 
         if answer.abstained:
             abstain_count += 1
-        elif not answer.citations:
-            # generate_answer already guarantees this can't happen (a
-            # non-abstained answer always has >=1 valid citation) - kept
-            # as a measured check, not an assumption, so a future
-            # regression in that guarantee shows up here as a number,
-            # not silently.
-            citation_validation_failures += 1
+            reason = answer.reason or "unknown"
+            abstain_reason_counts[reason] = abstain_reason_counts.get(reason, 0) + 1
+        else:
+            # generate_answer() guarantees a non-abstained answer always
+            # has >=1 valid citation. This is a canary, not a metric: if
+            # it ever fires, that's a real regression in that guarantee,
+            # not something to silently tally and report as a number
+            # alongside the abstain-reason breakdown above.
+            assert answer.citations, (
+                "generate_answer() returned a non-abstained answer with no "
+                "citations - this violates its documented cite-or-abstain contract"
+            )
 
     return GenerationStats(
         runs=runs,
         abstain_count=abstain_count,
-        citation_validation_failures=citation_validation_failures,
+        abstain_reason_counts=abstain_reason_counts,
         avg_retrieval_ms=sum(retrieval_times) / len(retrieval_times) if retrieval_times else 0.0,
         avg_generation_ms=sum(generation_times) / len(generation_times)
         if generation_times

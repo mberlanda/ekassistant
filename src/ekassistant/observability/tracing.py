@@ -15,6 +15,18 @@ the trace file is not obviously safe to share as broadly as a
 content-free log would be, but it also doesn't duplicate document content
 into a second, separately-secured file. Revisit together if traces need
 richer debugging content later.
+
+Two further scope cuts from docs/design/observability.md's Responsibilities,
+not yet implemented, called out explicitly rather than left implicit:
+- Responsibility 1 (per-run tracing) asks for the dense/keyword/fused/
+  reranked candidate breakdown, not just the final retrieved set - a
+  RunTrace only has the latter. Useful for debugging *why* a chunk was
+  or wasn't in the final context, not currently answerable from a trace.
+- Responsibility 5 (prompt/version registry): chat_model/embed_model are
+  logged, but no prompt-template identifier/version - "which exact
+  prompt produced this answer" still isn't answerable from a trace alone
+  if SYSTEM_PROMPT ever changes without a corresponding code/config
+  version bump to log.
 """
 
 import json
@@ -32,6 +44,7 @@ class RunTrace:
     retrieval_ms: float
     generation_ms: float
     abstained: bool
+    abstain_reason: str | None
     citation_count: int
     chat_model: str
     embed_model: str

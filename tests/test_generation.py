@@ -1,5 +1,13 @@
 from ekassistant.models.context import ContextChunk
-from ekassistant.models.generation import generate_answer
+from ekassistant.models.generation import (
+    REASON_BLANK_ANSWER,
+    REASON_EMPTY_CONTEXT,
+    REASON_INVALID_CITATION,
+    REASON_MALFORMED_RESPONSE,
+    REASON_MODEL_REPORTED_ABSTAIN,
+    REASON_NO_CITATIONS,
+    generate_answer,
+)
 
 CONTEXT = [ContextChunk(chunk_id="c1", source="policy.md", text="The VPN requires MFA.")]
 
@@ -18,6 +26,7 @@ def test_no_context_abstains_without_calling_the_model():
     assert result.abstained is True
     assert result.answer == ""
     assert result.citations == []
+    assert result.reason == REASON_EMPTY_CONTEXT
 
 
 def test_valid_grounded_answer_passes_through():
@@ -30,6 +39,7 @@ def test_valid_grounded_answer_passes_through():
     assert result.abstained is False
     assert result.answer == "Yes, MFA is required."
     assert result.citations[0].chunk_id == "c1"
+    assert result.reason is None
 
 
 def test_citation_outside_context_downgrades_to_abstain():
@@ -41,6 +51,7 @@ def test_citation_outside_context_downgrades_to_abstain():
     client = FakeChatClient(response)
     result = generate_answer("does the vpn need mfa?", CONTEXT, client)
     assert result.abstained is True
+    assert result.reason == REASON_INVALID_CITATION
 
 
 def test_no_citations_but_not_abstained_downgrades_to_abstain():
@@ -48,12 +59,14 @@ def test_no_citations_but_not_abstained_downgrades_to_abstain():
     client = FakeChatClient(response)
     result = generate_answer("does the vpn need mfa?", CONTEXT, client)
     assert result.abstained is True
+    assert result.reason == REASON_NO_CITATIONS
 
 
 def test_malformed_json_downgrades_to_abstain():
     client = FakeChatClient(response="not valid json at all")
     result = generate_answer("does the vpn need mfa?", CONTEXT, client)
     assert result.abstained is True
+    assert result.reason == REASON_MALFORMED_RESPONSE
 
 
 def test_model_reported_abstain_is_normalized():
@@ -63,6 +76,7 @@ def test_model_reported_abstain_is_normalized():
     assert result.abstained is True
     assert result.answer == ""
     assert result.citations == []
+    assert result.reason == REASON_MODEL_REPORTED_ABSTAIN
 
 
 def test_mutating_one_abstain_result_does_not_affect_the_next():
@@ -81,6 +95,7 @@ def test_blank_answer_but_not_abstained_downgrades_to_abstain():
     client = FakeChatClient(response)
     result = generate_answer("does the vpn need mfa?", CONTEXT, client)
     assert result.abstained is True
+    assert result.reason == REASON_BLANK_ANSWER
 
 
 def test_citation_source_is_rebuilt_from_context_not_trusted_from_the_model():

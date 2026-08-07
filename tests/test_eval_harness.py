@@ -1,9 +1,12 @@
 import pathlib
 
+import pytest
 import yaml
 
 from ekassistant.identity.store import IdentityStore
 from ekassistant.index.types import SearchResult
+from ekassistant.models.schema import GroundedAnswer
+from ekassistant.observability import eval_harness
 from ekassistant.observability.eval_harness import (
     EVAL_QUERIES,
     RetrievalCheck,
@@ -161,7 +164,35 @@ def test_measure_generation_reports_abstain_rate():
     assert stats.runs == 2
     assert stats.abstain_count == 1
     assert stats.abstain_rate == 0.5
-    assert stats.citation_validation_failures == 0
+    assert stats.abstain_reason_counts == {"model_reported_abstain": 1}
+
+
+def test_measure_generation_asserts_on_a_citation_contract_violation(monkeypatch):
+    # generate_answer() itself prevents a non-abstained, citation-less
+    # GroundedAnswer by construction (see test_generation.py) - this
+    # test proves measure_generation()'s canary assertion would actually
+    # fire if that guarantee were ever broken, rather than silently
+    # passing an invalid result through as if it were a normal answer.
+    monkeypatch.setattr(
+        eval_harness,
+        "generate_answer",
+        lambda question, context_chunks, chat_client: GroundedAnswer(
+            answer="Yes.", citations=[], abstained=False, reason=None
+        ),
+    )
+    keyword_index = FakeKeywordIndexBySource({"doc-a.md": ["engineering"]})
+
+    with pytest.raises(AssertionError):
+        measure_generation(
+            "question",
+            ["engineering"],
+            runs=1,
+            embed_client=FakeEmbedder(),
+            vector_index=FakeVectorIndex(),
+            keyword_index=keyword_index,
+            reranker=PassthroughReranker(),
+            chat_client=FakeChatClient(["irrelevant"]),
+        )
 
 
 def test_eval_queries_reference_documents_that_exist_in_the_real_seed_corpus():

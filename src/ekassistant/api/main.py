@@ -148,6 +148,7 @@ def query(
             retrieval_ms=result.retrieval_ms,
             generation_ms=result.generation_ms,
             abstained=result.answer.abstained,
+            abstain_reason=result.answer.reason,
             citation_count=len(result.answer.citations),
             chat_model=settings.ollama_model,
             embed_model=settings.ollama_embed_model,

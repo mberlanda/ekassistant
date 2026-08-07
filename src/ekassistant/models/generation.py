@@ -17,7 +17,7 @@ from typing import Protocol
 from pydantic import ValidationError
 
 from ekassistant.models.context import ContextChunk
-from ekassistant.models.schema import Citation, GroundedAnswer
+from ekassistant.models.schema import Citation, GroundedAnswer, ModelResponse
 
 SYSTEM_PROMPT = (
     "You are an enterprise knowledge assistant. Answer the user's question "
@@ -28,12 +28,22 @@ SYSTEM_PROMPT = (
     "that is not present in the provided context."
 )
 
+# GroundedAnswer.reason values - see docs/design/observability.md's
+# distinction between "abstain rate" and "citation-validation failure
+# rate" as separate metrics.
+REASON_EMPTY_CONTEXT = "empty_context"
+REASON_MALFORMED_RESPONSE = "malformed_response"
+REASON_MODEL_REPORTED_ABSTAIN = "model_reported_abstain"
+REASON_BLANK_ANSWER = "blank_answer"
+REASON_NO_CITATIONS = "no_citations"
+REASON_INVALID_CITATION = "invalid_citation"
 
-def _abstain() -> GroundedAnswer:
+
+def _abstain(reason: str) -> GroundedAnswer:
     # A fresh instance every call: GroundedAnswer.citations is a mutable
     # list, so a shared module-level instance would let one caller's
     # mutation corrupt every other abstain response.
-    return GroundedAnswer(answer="", citations=[], abstained=True)
+    return GroundedAnswer(answer="", citations=[], abstained=True, reason=reason)
 
 
 class ChatClient(Protocol):
@@ -55,35 +65,35 @@ def generate_answer(
     question: str, context_chunks: list[ContextChunk], client: ChatClient
 ) -> GroundedAnswer:
     if not context_chunks:
-        return _abstain()
+        return _abstain(REASON_EMPTY_CONTEXT)
 
     user_prompt = f"Context:\n{_format_context(context_chunks)}\n\nQuestion: {question}"
-    raw = client.chat_json(SYSTEM_PROMPT, user_prompt, GroundedAnswer.model_json_schema())
+    raw = client.chat_json(SYSTEM_PROMPT, user_prompt, ModelResponse.model_json_schema())
 
     try:
-        candidate = GroundedAnswer.model_validate_json(raw)
+        candidate = ModelResponse.model_validate_json(raw)
     except ValidationError:
-        return _abstain()
+        return _abstain(REASON_MALFORMED_RESPONSE)
 
     return _validate_citations(candidate, context_chunks)
 
 
 def _validate_citations(
-    candidate: GroundedAnswer, context_chunks: list[ContextChunk]
+    candidate: ModelResponse, context_chunks: list[ContextChunk]
 ) -> GroundedAnswer:
     if candidate.abstained:
-        return _abstain()
+        return _abstain(REASON_MODEL_REPORTED_ABSTAIN)
     if not candidate.answer.strip():
         # abstained=False with a blank answer is neither a real answer nor
         # a signaled abstain - treat it as the latter rather than passing
         # an empty "success" through to the caller.
-        return _abstain()
+        return _abstain(REASON_BLANK_ANSWER)
     if not candidate.citations:
-        return _abstain()
+        return _abstain(REASON_NO_CITATIONS)
 
     chunks_by_id = {c.chunk_id: c for c in context_chunks}
     if any(citation.chunk_id not in chunks_by_id for citation in candidate.citations):
-        return _abstain()
+        return _abstain(REASON_INVALID_CITATION)
 
     # Rebuild citations from the authoritative context chunk, never from
     # the model's own echoed `source` field: a chunk_id is validated above,
@@ -93,4 +103,6 @@ def _validate_citations(
         Citation(chunk_id=citation.chunk_id, source=chunks_by_id[citation.chunk_id].source)
         for citation in candidate.citations
     ]
-    return GroundedAnswer(answer=candidate.answer, citations=trusted_citations, abstained=False)
+    return GroundedAnswer(
+        answer=candidate.answer, citations=trusted_citations, abstained=False, reason=None
+    )

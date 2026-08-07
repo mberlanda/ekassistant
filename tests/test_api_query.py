@@ -1,13 +1,29 @@
 import asyncio
 
 import httpx
+import pytest
 from fastapi.testclient import TestClient
 
 from ekassistant.api.main import app, get_ollama_client, get_reranker, get_vector_index
-from ekassistant.config.settings import Settings
+from ekassistant.config.settings import Settings, get_settings
 from ekassistant.index.keyword_index import SqliteKeywordIndex
 from ekassistant.index.types import IndexedChunk, SearchResult
 from ekassistant.retrieval.reranker import PassthroughReranker
+
+
+@pytest.fixture(autouse=True)
+def _isolated_trace_log(tmp_path, monkeypatch):
+    # query() reads settings.trace_log_path directly (not via Depends()),
+    # so without this every test in this file would append real trace
+    # lines into the developer's actual data/traces.jsonl on disk -
+    # confirmed happening before this fixture existed. get_settings() is
+    # @lru_cache'd, so the env var must be set AND the cache cleared, both
+    # before the test (to pick up the override) and after (so a later
+    # test/session doesn't keep using this tmp_path after it's gone).
+    monkeypatch.setenv("TRACE_LOG_PATH", str(tmp_path / "traces.jsonl"))
+    get_settings.cache_clear()
+    yield
+    get_settings.cache_clear()
 
 
 class FakeOllamaClient:
