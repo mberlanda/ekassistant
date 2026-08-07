@@ -112,14 +112,22 @@ def query(
     user_id = x_user_id or settings.default_user
     groups = get_identity_store().groups_for(user_id)
 
+    # ollama_client is passed twice on purpose, not a copy-paste slip:
+    # OllamaClient implements both the Embedder and ChatClient protocols
+    # (see docs/design/model-layer.md), and answer_question() needs one
+    # of each. Keyword arguments here, not positional, since several of
+    # these parameters are structurally similar enough (two OllamaClient
+    # instances, two Protocol-shaped index searchers) that a positional
+    # transposition would run without a type error and just silently
+    # misbehave.
     result = answer_question(
-        request.question,
-        groups,
-        ollama_client,
-        vector_index,
-        keyword_index,
-        reranker,
-        ollama_client,
+        question=request.question,
+        allowed_groups=groups,
+        embed_client=ollama_client,
+        vector_index=vector_index,
+        keyword_index=keyword_index,
+        reranker=reranker,
+        chat_client=ollama_client,
     )
     return QueryResponse(
         answer=result.answer,
