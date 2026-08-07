@@ -18,9 +18,13 @@ class Settings(BaseSettings):
     ollama_model: str = "llama3.2:1b"
     ollama_embed_model: str = "nomic-embed-text"
 
-    # Vector index (see docs/decisions/0005)
+    # Vector index (see docs/decisions/0005). embedding_dimensions must match
+    # whatever ollama_embed_model actually outputs (768 for nomic-embed-text,
+    # see docs/decisions/0006) - changing the embedding model means changing
+    # this too, and recreating the collection at the new dimensionality.
     qdrant_url: str = "http://localhost:6333"
     qdrant_collection: str = "ekassistant_chunks"
+    embedding_dimensions: int = 768
 
     # Keyword index (see docs/decisions/0005)
     keyword_index_path: Path = Path("./data/keyword_index.sqlite3")
