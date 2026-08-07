@@ -135,3 +135,18 @@ def test_ensure_collection_is_idempotent(vector_index):
 
 def test_delete_of_never_upserted_chunk_does_not_raise(vector_index):
     vector_index.delete("does-not-exist")
+
+
+def test_chunk_ids_for_source_returns_only_that_sources_chunks(vector_index):
+    vector_index.upsert(ENGINEERING_CHUNK, EMBEDDING)
+    vector_index.upsert(FINANCE_CHUNK, EMBEDDING)
+
+    assert vector_index.chunk_ids_for_source("runbook.md") == {ENGINEERING_CHUNK.chunk_id}
+    assert vector_index.chunk_ids_for_source("no-such-source.md") == set()
+
+
+def test_all_sources_returns_the_distinct_set_of_indexed_sources(vector_index):
+    vector_index.upsert(ENGINEERING_CHUNK, EMBEDDING)
+    vector_index.upsert(FINANCE_CHUNK, EMBEDDING)
+
+    assert vector_index.all_sources() == {"runbook.md", "expenses.md"}

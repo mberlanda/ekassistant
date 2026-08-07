@@ -20,20 +20,45 @@ class FakeEmbedder:
         return [float(len(text))]
 
 
-class FakeVectorIndex:
+class FakeIndex:
+    """Models a real index adapter's keyed upsert/delete/lookup semantics
+    (unlike an append-only log), so re-running ingest against it behaves
+    like a real index would - both fakes below share this behavior since
+    run_ingest treats the vector and keyword index identically for the
+    diff/delete bookkeeping.
+    """
+
     def __init__(self):
+        self.by_chunk_id: dict[str, IndexedChunk] = {}
+
+    def chunk_ids_for_source(self, source: str) -> set[str]:
+        return {cid for cid, chunk in self.by_chunk_id.items() if chunk.source == source}
+
+    def all_sources(self) -> set[str]:
+        return {chunk.source for chunk in self.by_chunk_id.values()}
+
+    def delete(self, chunk_id: str) -> None:
+        self.by_chunk_id.pop(chunk_id, None)
+
+
+class FakeVectorIndex(FakeIndex):
+    def __init__(self):
+        super().__init__()
         self.upserted: list[tuple[IndexedChunk, list[float]]] = []
 
     def upsert(self, chunk: IndexedChunk, embedding: list[float]) -> None:
         self.upserted.append((chunk, embedding))
+        self.by_chunk_id[chunk.chunk_id] = chunk
 
 
-class FakeKeywordIndex:
+class FakeKeywordIndex(FakeIndex):
     def __init__(self):
+        super().__init__()
         self.upserted: list[IndexedChunk] = []
 
     def upsert(self, chunk: IndexedChunk) -> None:
         self.upserted.append(chunk)
+        self.by_chunk_id[chunk.chunk_id] = chunk
 
 
 def test_run_ingest_chunks_embeds_and_writes_to_both_indexes():
@@ -82,75 +107,86 @@ def test_run_ingest_with_no_documents_writes_nothing():
     assert chunk_count == 0
 
 
-class FakeKeyedVectorIndex:
-    """Models a real index's upsert-by-chunk_id semantics (unlike
-    FakeVectorIndex's append-only log above), so re-running ingest against
-    it behaves like a real index would.
+def test_reingesting_a_shrunk_document_deletes_the_orphaned_chunks_from_both_indexes():
+    """Regression test for the gap this PR fixes: re-running ingest on a
+    document that now produces fewer chunks must delete the extra
+    chunk_ids a previous run wrote, from both indexes, not just leave them
+    stale-but-retrievable.
     """
-
-    def __init__(self):
-        self.by_chunk_id: dict[str, IndexedChunk] = {}
-
-    def upsert(self, chunk: IndexedChunk, embedding: list[float]) -> None:
-        self.by_chunk_id[chunk.chunk_id] = chunk
-
-
-def test_KNOWN_GAP_reingesting_a_shrunk_document_leaves_orphaned_chunks():
-    """Characterizes the documented gap in pipeline.py's module docstring:
-    re-running ingest on a document that now produces fewer chunks does
-    NOT delete the extra chunk_ids a previous run wrote. This test exists
-    so the gap is a visible, intentional fact of current behavior - not
-    silently assumed away - and so whichever PR fixes it has a test to
-    flip instead of a bug to rediscover from scratch.
-    """
-    vector_index = FakeKeyedVectorIndex()
+    vector_index = FakeVectorIndex()
+    keyword_index = FakeKeywordIndex()
 
     first_run_text = "# H1\nBody one.\n\n# H2\nBody two.\n\n# H3\nBody three."
     run_ingest(
         FakeConnector([Document("a.md", "a.md", first_run_text, ["eng"])]),
         FakeEmbedder(),
         vector_index,
-        FakeKeywordIndex(),
+        keyword_index,
     )
     assert set(vector_index.by_chunk_id) == {"a.md#0", "a.md#1", "a.md#2"}
+    assert set(keyword_index.by_chunk_id) == {"a.md#0", "a.md#1", "a.md#2"}
 
     shrunk_text = "# H1\nBody one only now."
     run_ingest(
         FakeConnector([Document("a.md", "a.md", shrunk_text, ["eng"])]),
         FakeEmbedder(),
         vector_index,
-        FakeKeywordIndex(),
+        keyword_index,
     )
 
-    # "a.md#1" and "a.md#2" are stale (from content that no longer exists)
-    # but still present - this is the gap, not the desired end state.
-    assert set(vector_index.by_chunk_id) == {"a.md#0", "a.md#1", "a.md#2"}
+    assert set(vector_index.by_chunk_id) == {"a.md#0"}
+    assert set(keyword_index.by_chunk_id) == {"a.md#0"}
     assert vector_index.by_chunk_id["a.md#0"].text == "# H1\nBody one only now."
 
 
-def test_KNOWN_GAP_removing_a_document_entirely_leaves_its_chunks_and_acl_live():
-    """The more severe half of the same gap: a document deleted from the
-    connector's source (e.g. removed from manifest.yaml, or its access
-    revoked) is never revisited by load_documents() again, so its chunks -
-    with their ORIGINAL allowed_groups - are never removed. This is an
-    access-revocation staleness case, not just a relevance one.
+def test_reingesting_with_a_document_removed_deletes_all_its_chunks_and_acl_from_both_indexes():
+    """Regression test for the more severe half of the same gap: a
+    document deleted from the connector's source (e.g. removed from
+    manifest.yaml, or its access revoked) must have all of its chunks -
+    and their now-stale allowed_groups - removed from both indexes, not
+    stay live and citable indefinitely.
     """
-    vector_index = FakeKeyedVectorIndex()
+    vector_index = FakeVectorIndex()
+    keyword_index = FakeKeywordIndex()
 
     run_ingest(
         FakeConnector([Document("secret.md", "secret.md", "Sensitive content.", ["finance"])]),
         FakeEmbedder(),
         vector_index,
-        FakeKeywordIndex(),
+        keyword_index,
     )
     assert set(vector_index.by_chunk_id) == {"secret.md#0"}
 
     # "secret.md" is now gone from what the connector returns entirely -
     # e.g. removed from the manifest, or the finance group's access to it
     # was revoked upstream.
-    run_ingest(FakeConnector([]), FakeEmbedder(), vector_index, FakeKeywordIndex())
+    run_ingest(FakeConnector([]), FakeEmbedder(), vector_index, keyword_index)
 
-    # Still there, still tagged for a group that (in the revocation
-    # scenario) should no longer see it - this is the gap.
-    assert set(vector_index.by_chunk_id) == {"secret.md#0"}
-    assert vector_index.by_chunk_id["secret.md#0"].allowed_groups == ["finance"]
+    assert vector_index.by_chunk_id == {}
+    assert keyword_index.by_chunk_id == {}
+
+
+def test_stale_chunk_only_present_in_one_index_is_still_deleted_from_both():
+    """The diff checks the UNION of what each index reports, not just one
+    side - so a chunk that's already drifted out of sync between the two
+    indexes (present in one, missing in the other, e.g. from a prior
+    partial failure) still gets a delete issued to both, rather than the
+    drift going undetected because only one index was consulted.
+    """
+    vector_index = FakeVectorIndex()
+    keyword_index = FakeKeywordIndex()
+
+    # Simulate drift directly: a stale chunk sitting only in the vector
+    # index, with nothing in the keyword index for the same source.
+    stale = IndexedChunk(chunk_id="a.md#5", source="a.md", text="stale", allowed_groups=["eng"])
+    vector_index.by_chunk_id["a.md#5"] = stale
+
+    run_ingest(
+        FakeConnector([Document("a.md", "a.md", "Just one chunk now.", ["eng"])]),
+        FakeEmbedder(),
+        vector_index,
+        keyword_index,
+    )
+
+    assert "a.md#5" not in vector_index.by_chunk_id
+    assert set(vector_index.by_chunk_id) == {"a.md#0"}

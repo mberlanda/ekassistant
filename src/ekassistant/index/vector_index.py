@@ -62,6 +62,38 @@ class QdrantVectorIndex:
             points_selector=models.PointIdsList(points=[_point_id(chunk_id)]),
         )
 
+    def chunk_ids_for_source(self, source: str) -> set[str]:
+        source_filter = models.Filter(
+            must=[models.FieldCondition(key="source", match=models.MatchValue(value=source))]
+        )
+        return {
+            point.payload["chunk_id"]
+            for point in self._scroll_all(scroll_filter=source_filter)
+        }
+
+    def all_sources(self) -> set[str]:
+        return {point.payload["source"] for point in self._scroll_all()}
+
+    def _scroll_all(self, scroll_filter: models.Filter | None = None) -> list[models.Record]:
+        # scroll() paginates (default page size well under our POC corpus
+        # sizes) - loop until Qdrant reports no further offset rather than
+        # assuming one page covers everything.
+        records: list[models.Record] = []
+        offset = None
+        while True:
+            page, offset = self._client.scroll(
+                collection_name=self._collection,
+                scroll_filter=scroll_filter,
+                limit=256,
+                offset=offset,
+                with_payload=True,
+                with_vectors=False,
+            )
+            records.extend(page)
+            if offset is None:
+                break
+        return records
+
     def search(
         self, query_embedding: list[float], allowed_groups: list[str], top_n: int
     ) -> list[SearchResult]:
