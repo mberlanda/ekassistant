@@ -40,34 +40,40 @@ graph), agentic multi-hop retrieval. See
 ## Repository map
 
 ```
+config/
+  identities.yaml         mock user -> group mapping (see ADR-0007)
+  crawl_targets.yaml       web crawler seed URLs + ACL (empty by default, see ADR-0010)
 docs/
   context/brief.md      original requirements (historical record)
   architecture.md        system-wide diagrams + spine-to-doc index
   decisions/              ADRs — the *why*
   design/                 low-level designs — the *how*, per component
   glossary.md            every abbreviation, defined once
+  roadmap.md              what's built vs. designed-only, PR by PR
+seed_corpus/               tiny hand-authored fixture corpus (.md/.html/.pdf/.docx)
 src/ekassistant/          application code, one subpackage per component
   config/                 settings (env-driven)
   identity/               mock user -> group lookup
-  ingest/                 connectors, parsing, chunking, embedding
+  ingest/                 connectors (filesystem, web crawler), parsing, chunking, embedding
   index/                  vector (Qdrant) + keyword (SQLite FTS5) adapters
   retrieval/               ACL pre-filter, hybrid search, RRF, rerank
-  orchestration/          request pipeline (rewrite -> retrieve -> generate)
+  orchestration/          request pipeline (retrieve -> generate)
   models/                 LLM + embedding clients (Ollama-backed)
   api/                    API Gateway (FastAPI)
   tui/                    terminal client
   observability/         tracing, metrics, eval harness
-  governance/             ACL propagation checks, classification metadata
+  governance/             ACL-propagation delete checks
 tests/
 docker-compose.yml        Qdrant, run via OrbStack
-Makefile                  venv, install, lint, test, up, down, api, tui, models
+Makefile                  venv, install, lint, test, up, down, api, tui, models, ingest, eval
 ```
 
 ## Quickstart
 
 Requires: [pyenv](https://github.com/pyenv/pyenv), [Ollama](https://ollama.com)
-(installed, not yet running any model), and [OrbStack](https://orbstack.dev)
-for the Docker runtime.
+(installed and running — the desktop app keeps its service up automatically;
+CLI-only installs need `ollama serve` running in the background), and
+[OrbStack](https://orbstack.dev) for the Docker runtime.
 
 ```bash
 # 1. Interpreter + virtualenv (uses the pinned version in .python-version)
@@ -81,10 +87,23 @@ make models
 # 3. Bring up the vector store
 make up
 
-# 4. Run the API Gateway, then the TUI in another terminal
+# 4. Ingest the seed corpus (+ any web crawler targets you've configured -
+#    see config/crawl_targets.yaml, empty/no-op by default) into both indexes.
+#    Re-running this is safe: it's idempotent, and removing a document/crawl
+#    target and re-running propagates the deletion to both indexes - see the
+#    "Governance" row in docs/roadmap.md.
+make ingest
+
+# 5. Run the API Gateway, then the TUI in another terminal
 make api
 make tui
 ```
+
+In the TUI, `:user <id>` switches the mock identity (try `alice`, `bob`,
+`carol`, or `guest` — see `config/identities.yaml`), then just type a
+question. `alice` (engineering) asking "Does the VPN require multi-factor
+authentication?" is the question exercised in
+[docs/roadmap.md](docs/roadmap.md)'s live verification notes.
 
 Config lives in `.env` (copy `.env.example`); mock users/groups live in
 `config/identities.yaml` — see
@@ -92,11 +111,19 @@ Config lives in `.env` (copy `.env.example`); mock users/groups live in
 authentication is mocked in V1, and never treat it as a real security
 boundary.
 
+**Optional**: `make eval` runs the two-tier eval harness against the live
+services — Tier 1 is deterministic ACL/retrieval correctness (every mock
+user × every seed_corpus document), Tier 2 measures (doesn't assert)
+generation quality, since the small local chat model is
+[documented as unreliable](docs/decisions/0004-local-llm-serving-via-ollama.md)
+at the cite-or-abstain contract by design, not by bug. Requires `make ingest`
+to have run first.
+
 ## Status
 
-Documentation (ADRs + low-level designs) and the project skeleton are in
-place; the pipeline is being built incrementally on top of them, module by
-module, following [docs/design/](docs/design/). See
-[docs/roadmap.md](docs/roadmap.md) for the up-to-date, honest breakdown of
-what's done vs. still just designed — this README describes the
-destination, not necessarily everything already implemented.
+V1 is complete end-to-end: grounded question-answering, per-user ACL
+enforcement at retrieval, citations, abstain-when-not-found, a two-tier
+eval harness, ACL-propagation delete checks, and a domain-agnostic web
+crawler connector (opt-in via `config/crawl_targets.yaml`, empty by
+default). See [docs/roadmap.md](docs/roadmap.md) for the PR-by-PR
+breakdown, including what each PR's live verification actually proved.
