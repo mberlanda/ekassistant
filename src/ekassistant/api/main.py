@@ -41,13 +41,10 @@ def get_vector_index() -> QdrantVectorIndex:
 
 
 def get_keyword_index() -> SqliteKeywordIndex:
-    # Deliberately NOT @lru_cache'd, unlike the other dependencies above:
-    # sqlite3 connections are only usable from the thread that created
-    # them (see docs/decisions/0005's adapter, and the constraint flagged
-    # when SqliteKeywordIndex was introduced), and FastAPI can run a sync
-    # route handler on a different threadpool thread per request. A fresh
-    # connection per request sidesteps that entirely - SQLite connection
-    # setup is cheap enough that this isn't a meaningful cost here.
+    # Deliberately NOT registered as a FastAPI Depends() parameter below,
+    # unlike the other three dependencies - see the call site in query()
+    # for why. Kept as a plain module-level function (not @lru_cache'd)
+    # so it can still be monkeypatched directly in tests.
     return SqliteKeywordIndex(get_settings())
 
 
@@ -95,7 +92,6 @@ def query(
     request: QueryRequest,
     ollama_client: Annotated[OllamaClient, Depends(get_ollama_client)],
     vector_index: Annotated[QdrantVectorIndex, Depends(get_vector_index)],
-    keyword_index: Annotated[SqliteKeywordIndex, Depends(get_keyword_index)],
     reranker: Annotated[PassthroughReranker, Depends(get_reranker)],
     x_user_id: str | None = Header(default=None),
 ) -> QueryResponse:
@@ -103,14 +99,26 @@ def query(
 
     See docs/design/orchestration.md. Identity resolution is the same
     mock lookup /whoami uses; ACL enforcement itself happens inside the
-    index adapters during retrieval (ADR-0002), not here. Dependencies
-    are FastAPI-injected (Depends) rather than called directly, so tests
-    can override them with fakes via app.dependency_overrides without
-    needing a live Ollama/Qdrant.
+    index adapters during retrieval (ADR-0002), not here.
+
+    keyword_index is deliberately called directly here, NOT injected via
+    Depends() like the other three dependencies. FastAPI resolves each
+    sync Depends() callable through its own separate threadpool dispatch,
+    which is NOT guaranteed to land on the same OS thread as the route
+    handler body - so a SqliteKeywordIndex built via Depends() could be
+    constructed on one thread and then have .search() called on it (deep
+    inside answer_question() -> retrieve()) on another, which sqlite3
+    forbids. Verified this concretely: under real concurrent requests
+    (asyncio.gather against the ASGI app, not just sequential calls),
+    building it via Depends() failed the large majority of requests with
+    sqlite3.ProgrammingError. Constructing it inside this function body
+    keeps construction and use in the same synchronous call stack, and
+    therefore the same thread, regardless of concurrency.
     """
     settings = get_settings()
     user_id = x_user_id or settings.default_user
     groups = get_identity_store().groups_for(user_id)
+    keyword_index = get_keyword_index()
 
     # ollama_client is passed twice on purpose, not a copy-paste slip:
     # OllamaClient implements both the Embedder and ChatClient protocols

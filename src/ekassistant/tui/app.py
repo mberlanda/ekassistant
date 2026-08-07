@@ -25,23 +25,28 @@ def run() -> None:
 
     with httpx.Client(base_url=base_url, timeout=5.0) as client:
         while True:
+            # One try/except around the whole turn, not just console.input():
+            # _ask()'s /query call can run for up to 120s (see below), and
+            # Ctrl+C during that wait must exit the REPL cleanly too, the
+            # same as Ctrl+C/Ctrl+D at the prompt itself - not crash with a
+            # traceback partway through answering.
             try:
                 line = console.input("[green]> [/green]").strip()
+
+                if not line:
+                    continue
+                if line in (":quit", ":q"):
+                    break
+                if line.startswith(":user "):
+                    user_id = line.removeprefix(":user ").strip()
+                    resp = client.get("/whoami", headers={"X-User-Id": user_id})
+                    groups = resp.json()["groups"]
+                    console.print(f"Now [cyan]{user_id}[/cyan], groups: {groups or '(none)'}")
+                    continue
+
+                _ask(client, user_id, line)
             except (EOFError, KeyboardInterrupt):
                 break
-
-            if not line:
-                continue
-            if line in (":quit", ":q"):
-                break
-            if line.startswith(":user "):
-                user_id = line.removeprefix(":user ").strip()
-                resp = client.get("/whoami", headers={"X-User-Id": user_id})
-                groups = resp.json()["groups"]
-                console.print(f"Now [cyan]{user_id}[/cyan], groups: {groups or '(none)'}")
-                continue
-
-            _ask(client, user_id, line)
 
 
 def _ask(client: httpx.Client, user_id: str, question: str) -> None:
