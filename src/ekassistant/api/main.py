@@ -17,6 +17,7 @@ from ekassistant.identity.store import IdentityStore
 from ekassistant.index.keyword_index import SqliteKeywordIndex
 from ekassistant.index.vector_index import QdrantVectorIndex
 from ekassistant.models.ollama_client import OllamaClient
+from ekassistant.observability.tracing import RunTrace, record_run
 from ekassistant.orchestration.pipeline import answer_question
 from ekassistant.retrieval.reranker import PassthroughReranker
 
@@ -137,12 +138,30 @@ def query(
         reranker=reranker,
         chat_client=ollama_client,
     )
+
+    record_run(
+        RunTrace(
+            user_id=user_id,
+            groups=groups,
+            question=request.question,
+            retrieved_chunk_ids=result.retrieved_chunk_ids,
+            retrieval_ms=result.retrieval_ms,
+            generation_ms=result.generation_ms,
+            abstained=result.answer.abstained,
+            citation_count=len(result.answer.citations),
+            chat_model=settings.ollama_model,
+            embed_model=settings.ollama_embed_model,
+        ),
+        settings.trace_log_path,
+    )
+
     return QueryResponse(
-        answer=result.answer,
+        answer=result.answer.answer,
         citations=[
-            CitationResponse(chunk_id=c.chunk_id, source=c.source) for c in result.citations
+            CitationResponse(chunk_id=c.chunk_id, source=c.source)
+            for c in result.answer.citations
         ],
-        abstained=result.abstained,
+        abstained=result.answer.abstained,
     )
 
 
