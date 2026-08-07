@@ -1,3 +1,5 @@
+import pytest
+
 from ekassistant.ingest.connectors.filesystem import FilesystemConnector
 
 
@@ -25,6 +27,27 @@ def test_manifest_entry_missing_allowed_groups_fails_closed(tmp_path):
     docs = FilesystemConnector(tmp_path, manifest).load_documents()
 
     assert docs[0].allowed_groups == []
+
+
+def test_bare_string_allowed_groups_is_rejected_not_silently_iterated(tmp_path):
+    # A missing pair of brackets (`allowed_groups: engineering` instead of
+    # `allowed_groups: [engineering]`) must fail loudly, not be silently
+    # iterated character-by-character into bogus single-letter "groups".
+    (tmp_path / "a.md").write_text("Document A body.")
+    manifest = tmp_path / "manifest.yaml"
+    manifest.write_text("a.md:\n  allowed_groups: engineering\n")
+
+    with pytest.raises(ValueError, match="allowed_groups must be a list"):
+        FilesystemConnector(tmp_path, manifest).load_documents()
+
+
+def test_non_string_items_in_allowed_groups_are_rejected(tmp_path):
+    (tmp_path / "a.md").write_text("Document A body.")
+    manifest = tmp_path / "manifest.yaml"
+    manifest.write_text("a.md:\n  allowed_groups: [engineering, 42]\n")
+
+    with pytest.raises(ValueError, match="allowed_groups must be a list"):
+        FilesystemConnector(tmp_path, manifest).load_documents()
 
 
 def test_empty_manifest_loads_no_documents(tmp_path):

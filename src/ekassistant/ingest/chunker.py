@@ -12,6 +12,10 @@ import re
 from ekassistant.index.types import IndexedChunk
 
 _HEADING_RE = re.compile(r"^#{1,6}\s+.*$")
+# Triple-backtick fences only (not ~~~), which covers the overwhelming
+# majority of Markdown code blocks - a deliberate scope limit, not an
+# oversight.
+_FENCE_RE = re.compile(r"^```")
 # Generous relative to nomic-embed-text's 8192-token context window (see
 # ADR-0006) - this bound exists to keep each chunk focused on one idea for
 # citation precision, not because the embedder would truncate otherwise.
@@ -26,7 +30,11 @@ def chunk_document(
     for section in _split_by_heading(text):
         for piece in _split_by_paragraph_if_too_long(section):
             piece = piece.strip()
-            if not piece:
+            if not piece or _is_heading_only(piece):
+                # A heading with no body (e.g. back-to-back headings, or a
+                # trailing heading with nothing after it) is not a citable
+                # unit - skip it rather than index a low-value chunk whose
+                # entire text is just "## Some Heading".
                 continue
             chunks.append(
                 IndexedChunk(
@@ -44,8 +52,11 @@ def _split_by_heading(text: str) -> list[str]:
     lines = text.splitlines()
     sections: list[str] = []
     current: list[str] = []
+    in_fence = False
     for line in lines:
-        if _HEADING_RE.match(line) and current:
+        if _FENCE_RE.match(line):
+            in_fence = not in_fence
+        if not in_fence and _HEADING_RE.match(line) and current:
             sections.append("\n".join(current).strip())
             current = [line]
         else:
@@ -53,6 +64,13 @@ def _split_by_heading(text: str) -> list[str]:
     if current:
         sections.append("\n".join(current).strip())
     return [s for s in sections if s]
+
+
+def _is_heading_only(piece: str) -> bool:
+    lines = piece.splitlines()
+    if not lines or not _HEADING_RE.match(lines[0]):
+        return False
+    return not any(line.strip() for line in lines[1:])
 
 
 def _split_by_paragraph_if_too_long(section: str) -> list[str]:

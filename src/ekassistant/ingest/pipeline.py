@@ -6,18 +6,30 @@ store but not the other for longer than a single chunk's write time - see
 docs/decisions/0005-vector-and-keyword-store-choice.md's consistency
 discussion.
 
-KNOWN GAP: re-running ingest on a document that now chunks into FEWER
-pieces than a previous run leaves the extra old chunk_ids (e.g. "doc.md#5"
-when the doc now only produces "doc.md#0".."doc.md#3") orphaned in both
-indexes indefinitely - nothing here deletes a chunk_id that the current
-run no longer produces. Harmless for the static seed corpus this PR ships
-(chunk count never changes), but a real blocker for any source that gets
-re-ingested after edits. Fixing it needs either a "list chunk_ids for this
-doc_id" query on both index adapters or a stored high-water-mark per
-document - deferred rather than solved here (docs/design/ingest.md already
-scopes CDC/delete-propagation cadence as an open V2+ question); see
-tests/test_ingest_pipeline.py's characterization test for the exact
-behavior this leaves in place.
+KNOWN GAP: this pipeline never diffs the current run's chunk_ids against
+a previous run's. Two consequences, in increasing order of severity:
+
+  1. A document that now chunks into FEWER pieces (edited shorter) leaves
+     the extra old chunk_ids (e.g. "doc.md#5" when the doc now only
+     produces "doc.md#0".."doc.md#3") orphaned in both indexes - stale
+     but harmless-ish content stays retrievable.
+  2. A document REMOVED from the connector entirely (deleted from
+     manifest.yaml, or access revoked) is never revisited by
+     load_documents() at all, so 100% of its chunks - with their
+     original allowed_groups - stay live and citable indefinitely. This
+     is an access-revocation staleness case, not just a relevance one:
+     docs/design/ingest.md's Responsibilities explicitly names delete
+     propagation "on access-revoked" as core scope, so this is the more
+     serious half of the gap even though both share the same root cause.
+
+Harmless for the static seed corpus this PR ships (nothing shrinks or
+disappears between runs), but a real blocker for any source re-ingested
+after edits or ACL changes. Fixing it needs either a "list chunk_ids for
+this doc_id" query on both index adapters or a stored high-water-mark /
+known-doc-id-set per source - deferred rather than solved here
+(docs/design/ingest.md already scopes CDC/delete-propagation cadence as
+an open V2+ question); see tests/test_ingest_pipeline.py's characterization
+tests for the exact behavior this leaves in place for both cases.
 """
 
 from typing import Protocol

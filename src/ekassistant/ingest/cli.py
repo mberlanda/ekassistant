@@ -23,8 +23,11 @@ def run() -> None:
     vector_index.ensure_collection()
     keyword_index = SqliteKeywordIndex(settings)
 
-    chunk_count = run_ingest(connector, embed_client, vector_index, keyword_index)
-    print(f"Ingested {chunk_count} chunks from {settings.seed_corpus_dir}.")
+    try:
+        chunk_count = run_ingest(connector, embed_client, vector_index, keyword_index)
+        print(f"Ingested {chunk_count} chunks from {settings.seed_corpus_dir}.")
+    finally:
+        keyword_index.close()
 
 
 if __name__ == "__main__":

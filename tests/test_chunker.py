@@ -54,3 +54,40 @@ def test_document_with_no_headings_is_still_chunked():
 
     assert len(chunks) == 1
     assert chunks[0].text == "Just plain text, no heading at all."
+
+
+def test_back_to_back_headings_with_no_body_produce_no_chunks():
+    # Nothing here is a citable unit - a heading alone is not content.
+    chunks = chunk_document("doc.md", "doc.md", "# H1\n# H2\n# H3\n", [])
+
+    assert chunks == []
+
+
+def test_trailing_heading_with_no_body_is_dropped_but_earlier_content_kept():
+    doc = "# Overview\nReal content here.\n\n# Empty Trailer\n"
+
+    chunks = chunk_document("doc.md", "doc.md", doc, [])
+
+    texts = [c.text for c in chunks]
+    assert any("Real content here." in t for t in texts)
+    assert not any(t.strip() == "# Empty Trailer" for t in texts)
+
+
+def test_hash_inside_a_fenced_code_block_is_not_treated_as_a_heading():
+    doc = (
+        "# Runbook\n\n"
+        "Run this to restart the pipeline:\n\n"
+        "```bash\n"
+        "# this is a shell comment, not a markdown heading\n"
+        "restart-pipeline --stage=deploy\n"
+        "```\n\n"
+        "Confirm the restart succeeded before closing the incident.\n"
+    )
+
+    chunks = chunk_document("doc.md", "doc.md", doc, [])
+
+    # Everything stays in one chunk - the fenced "#" line must not have
+    # split it into a separate section.
+    assert len(chunks) == 1
+    assert "restart-pipeline --stage=deploy" in chunks[0].text
+    assert "Confirm the restart succeeded" in chunks[0].text

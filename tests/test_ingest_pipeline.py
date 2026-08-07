@@ -126,3 +126,31 @@ def test_KNOWN_GAP_reingesting_a_shrunk_document_leaves_orphaned_chunks():
     # but still present - this is the gap, not the desired end state.
     assert set(vector_index.by_chunk_id) == {"a.md#0", "a.md#1", "a.md#2"}
     assert vector_index.by_chunk_id["a.md#0"].text == "# H1\nBody one only now."
+
+
+def test_KNOWN_GAP_removing_a_document_entirely_leaves_its_chunks_and_acl_live():
+    """The more severe half of the same gap: a document deleted from the
+    connector's source (e.g. removed from manifest.yaml, or its access
+    revoked) is never revisited by load_documents() again, so its chunks -
+    with their ORIGINAL allowed_groups - are never removed. This is an
+    access-revocation staleness case, not just a relevance one.
+    """
+    vector_index = FakeKeyedVectorIndex()
+
+    run_ingest(
+        FakeConnector([Document("secret.md", "secret.md", "Sensitive content.", ["finance"])]),
+        FakeEmbedder(),
+        vector_index,
+        FakeKeywordIndex(),
+    )
+    assert set(vector_index.by_chunk_id) == {"secret.md#0"}
+
+    # "secret.md" is now gone from what the connector returns entirely -
+    # e.g. removed from the manifest, or the finance group's access to it
+    # was revoked upstream.
+    run_ingest(FakeConnector([]), FakeEmbedder(), vector_index, FakeKeywordIndex())
+
+    # Still there, still tagged for a group that (in the revocation
+    # scenario) should no longer see it - this is the gap.
+    assert set(vector_index.by_chunk_id) == {"secret.md#0"}
+    assert vector_index.by_chunk_id["secret.md#0"].allowed_groups == ["finance"]
