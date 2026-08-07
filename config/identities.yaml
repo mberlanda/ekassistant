@@ -1,0 +1,19 @@
+# Mock user -> group lookup table.
+# See docs/decisions/0007-mock-identity-and-group-lookup.md — this is NOT
+# a real authentication mechanism and must never be treated as one.
+#
+# `guest` intentionally has no groups, so the ACL boundary is visible out
+# of the box: the same question asked as `alice` vs. `guest` should differ
+# whenever the answer depends on a group-restricted document.
+
+alice:
+  groups: [engineering, all-staff]
+
+bob:
+  groups: [support, all-staff]
+
+carol:
+  groups: [finance, all-staff]
+
+guest:
+  groups: []
