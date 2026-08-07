@@ -1,0 +1,44 @@
+# Roadmap
+
+Living status tracker for what's built vs. designed-but-not-built. Updated
+as each feature group merges. For *why* something is shaped the way it is,
+follow the doc links, not this page — this page only tracks *what exists*.
+
+Workflow for everything still "Not started": a feature branch, a PR against
+`main`, two independent review passes (findings fixed between passes), then
+merge — no direct-to-main commits for code once a component starts moving
+past its skeleton stub. Docs-only updates (like this file) may still land
+directly.
+
+## Done
+
+| Component | Docs | Status |
+|---|---|---|
+| ADRs + low-level designs + glossary + README | [docs/decisions/](decisions/), [docs/design/](design/) | Done |
+| Project skeleton (`src/ekassistant/*`, one subpackage per spine component) | [docs/architecture.md](architecture.md) | Done |
+| Settings (env-driven config) | [docs/design/api-gateway-identity.md](design/api-gateway-identity.md) | Done |
+| Mock identity/group lookup (`identity/store.py` + `config/identities.yaml`) | [ADR-0007](decisions/0007-mock-identity-and-group-lookup.md) | Done, tested |
+| API Gateway: `/health`, `/whoami` | [docs/design/api-gateway-identity.md](design/api-gateway-identity.md) | Done, tested |
+| TUI: REPL, mock user switching (`:user <id>`) | [docs/design/client-tui.md](design/client-tui.md) | Done, tested |
+| `docker-compose.yml` (Qdrant) | [ADR-0005](decisions/0005-vector-and-keyword-store-choice.md) | Done, verified running |
+| Dev tooling (Makefile, ruff, pytest, `.env.example`) | — | Done |
+| Ollama models pulled (`llama3.2:1b`, `nomic-embed-text`) | [ADR-0004](decisions/0004-local-llm-serving-via-ollama.md), [ADR-0006](decisions/0006-embedding-model-choice.md) | Done locally (not something a PR tracks — a machine-local step) |
+
+## Not started
+
+| # | Component | Docs | Description | Status |
+|---|---|---|---|---|
+| 1 | Model layer client | [docs/design/model-layer.md](design/model-layer.md), [ADR-0004](decisions/0004-local-llm-serving-via-ollama.md), [ADR-0006](decisions/0006-embedding-model-choice.md) | Ollama-backed chat + embed functions; structured cite-or-abstain output schema and its validation | Not started |
+| 2 | Index adapters | [docs/design/retrieval.md](design/retrieval.md), [ADR-0005](decisions/0005-vector-and-keyword-store-choice.md) | Qdrant adapter (collection setup at 768 dims, upsert, ACL-payload-filtered search) and SQLite FTS5 adapter (schema, ACL columns, `bm25()` search) behind a shared port | Not started |
+| 3 | Ingest core + tiny seed corpus | [docs/design/ingest.md](design/ingest.md) | Connector/parser/chunker interfaces, ACL tagger, dual index writer, wired to a handful of hand-written fixture documents across 2+ ACL groups — the smallest possible slice that proves ingest → retrieval → answer end to end | Not started |
+| 4 | Ingest format adapters | [docs/design/ingest.md](design/ingest.md) | Parsers for `.txt`/Markdown, HTML, PDF, `.docx`, each with its own small sample doc; format choice and any sample-corpus licensing/provenance recorded in a new ADR | Not started |
+| 5 | Ingest crawler adapter | [docs/design/ingest.md](design/ingest.md) (extended) | A connector that pulls pages from a small, scoped set of websites (robots.txt-respecting, allowlisted domains only) — needs its own ADR for scope/safety before implementation, since it's the one connector that reaches the open internet | Not started |
+| 6 | Retrieval | [docs/design/retrieval.md](design/retrieval.md), [ADR-0002](decisions/0002-acl-enforcement-at-retrieval.md), [ADR-0003](decisions/0003-hybrid-retrieval-with-rrf.md) | ACL filter compilation, dense + BM25 hybrid search, RRF fusion, reranker interface (pass-through default until a cross-encoder model is pulled) | Not started |
+| 7 | Orchestration + `/query` | [docs/design/orchestration.md](design/orchestration.md), [ADR-0008](decisions/0008-lightweight-orchestration.md) | Wire identity → retrieval → model layer into one request pipeline; add `POST /query` to the API Gateway; connect the TUI's question path (currently a stub message) | Not started |
+| 8 | Observability + eval harness | [docs/design/observability.md](design/observability.md) | Per-run tracing, metrics (latency, abstain rate), a labeled eval question set including ACL test cases (a user asking about a document outside their groups) | Not started |
+| 9 | Governance checks | [docs/design/governance.md](design/governance.md) | ACL-propagation regression checks (delete/revoke reaches both indexes); classification metadata is already captured at ingest (item 3/4) but nothing yet acts on it | Not started |
+
+Sequencing follows the numbers above — each depends on the ones before it
+(retrieval needs indexes populated by ingest, which needs the model layer
+for embedding; orchestration needs retrieval; eval needs orchestration to
+have something to evaluate).

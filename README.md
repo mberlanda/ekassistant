@@ -16,6 +16,7 @@ that actually owns that topic — this file stays short on purpose.
 | *Why* a specific decision was made | [docs/decisions/](docs/decisions/) (Architecture Decision Records) |
 | How a specific component is built, with tradeoffs | [docs/design/](docs/design/) (low-level designs) |
 | What an abbreviation means | [docs/glossary.md](docs/glossary.md) |
+| What's actually built vs. still designed-only | [docs/roadmap.md](docs/roadmap.md) |
 
 ## Scope
 
@@ -95,6 +96,7 @@ boundary.
 
 Documentation (ADRs + low-level designs) and the project skeleton are in
 place; the pipeline is being built incrementally on top of them, module by
-module, following [docs/design/](docs/design/). Check `git log` for the
-current state — this README describes the destination, not necessarily
-everything already implemented.
+module, following [docs/design/](docs/design/). See
+[docs/roadmap.md](docs/roadmap.md) for the up-to-date, honest breakdown of
+what's done vs. still just designed — this README describes the
+destination, not necessarily everything already implemented.
