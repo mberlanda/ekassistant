@@ -1,3 +1,4 @@
+import concurrent.futures
 import json
 
 from ekassistant.observability.tracing import RunTrace, record_run
@@ -56,3 +57,23 @@ def test_recorded_trace_contains_the_fields_observability_design_asks_for(tmp_pa
     assert record["chat_model"] == "llama3.2:1b"
     assert record["embed_model"] == "nomic-embed-text"
     assert "timestamp" in record
+
+
+def test_concurrent_writes_do_not_corrupt_or_lose_lines(tmp_path):
+    # Real requests to POST /query are genuinely concurrent (see the
+    # SQLite thread-affinity fix elsewhere in this PR series) - pins the
+    # atomic-append guarantee record_run()'s docstring documents: every
+    # write shows up, and every line is independently valid JSON, with
+    # no interleaved/corrupted lines from concurrent writers.
+    path = tmp_path / "traces.jsonl"
+
+    def write_one(i: int) -> None:
+        record_run(_trace(user_id=f"user{i}"), path)
+
+    with concurrent.futures.ThreadPoolExecutor(max_workers=20) as executor:
+        list(executor.map(write_one, range(100)))
+
+    lines = path.read_text().splitlines()
+    assert len(lines) == 100
+    user_ids = {json.loads(line)["user_id"] for line in lines}
+    assert user_ids == {f"user{i}" for i in range(100)}

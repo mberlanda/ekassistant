@@ -106,6 +106,11 @@ def run_retrieval_checks(
             vector_index,
             keyword_index,
             reranker,
+            # Wider than production's default final_k=5: this tier checks
+            # presence/absence (is the document reachable at all under
+            # this user's ACL), not ranking quality (is it #1) - a real
+            # ranking-quality regression that pushes a correct document
+            # from rank 1 to rank 8 wouldn't be this tier's job to catch.
             final_k=10,
         )
         retrieved_sources = [c.source for c in chunks]
