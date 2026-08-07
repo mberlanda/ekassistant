@@ -10,6 +10,8 @@ from pathlib import Path
 
 from bs4 import BeautifulSoup
 
+from ekassistant.ingest.parsers._shared import escape_accidental_heading
+
 _HEADING_TAGS = [f"h{level}" for level in range(1, 7)]
 
 
@@ -31,5 +33,9 @@ def parse(path: Path) -> str:
             level = int(tag.name[1])
             lines.append(f"{'#' * level} {text}")
         else:
-            lines.append(text)
+            # <p> text has no Markdown heading semantics of its own - if it
+            # happens to start with "# " (a pasted heading-style line, a
+            # ticket reference), it must not be mistaken for a real
+            # heading by chunker.py's _HEADING_RE.
+            lines.append(escape_accidental_heading(text))
     return "\n\n".join(lines)
