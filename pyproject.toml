@@ -1,0 +1,15 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "ekassistant"
+version = "0.1.0"
+description = "Enterprise Knowledge Assistant - grounded, cited Q&A over internal sources with ACL-aware retrieval"
+readme = "README.md"
+requires-python = ">=3.11"
+license = { text = "MIT" }
+authors = [{ name = "Mauro Berlanda" }]
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/ekassistant"]
