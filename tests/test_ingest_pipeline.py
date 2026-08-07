@@ -80,3 +80,49 @@ def test_run_ingest_with_no_documents_writes_nothing():
     )
 
     assert chunk_count == 0
+
+
+class FakeKeyedVectorIndex:
+    """Models a real index's upsert-by-chunk_id semantics (unlike
+    FakeVectorIndex's append-only log above), so re-running ingest against
+    it behaves like a real index would.
+    """
+
+    def __init__(self):
+        self.by_chunk_id: dict[str, IndexedChunk] = {}
+
+    def upsert(self, chunk: IndexedChunk, embedding: list[float]) -> None:
+        self.by_chunk_id[chunk.chunk_id] = chunk
+
+
+def test_KNOWN_GAP_reingesting_a_shrunk_document_leaves_orphaned_chunks():
+    """Characterizes the documented gap in pipeline.py's module docstring:
+    re-running ingest on a document that now produces fewer chunks does
+    NOT delete the extra chunk_ids a previous run wrote. This test exists
+    so the gap is a visible, intentional fact of current behavior - not
+    silently assumed away - and so whichever PR fixes it has a test to
+    flip instead of a bug to rediscover from scratch.
+    """
+    vector_index = FakeKeyedVectorIndex()
+
+    first_run_text = "# H1\nBody one.\n\n# H2\nBody two.\n\n# H3\nBody three."
+    run_ingest(
+        FakeConnector([Document("a.md", "a.md", first_run_text, ["eng"])]),
+        FakeEmbedder(),
+        vector_index,
+        FakeKeywordIndex(),
+    )
+    assert set(vector_index.by_chunk_id) == {"a.md#0", "a.md#1", "a.md#2"}
+
+    shrunk_text = "# H1\nBody one only now."
+    run_ingest(
+        FakeConnector([Document("a.md", "a.md", shrunk_text, ["eng"])]),
+        FakeEmbedder(),
+        vector_index,
+        FakeKeywordIndex(),
+    )
+
+    # "a.md#1" and "a.md#2" are stale (from content that no longer exists)
+    # but still present - this is the gap, not the desired end state.
+    assert set(vector_index.by_chunk_id) == {"a.md#0", "a.md#1", "a.md#2"}
+    assert vector_index.by_chunk_id["a.md#0"].text == "# H1\nBody one only now."

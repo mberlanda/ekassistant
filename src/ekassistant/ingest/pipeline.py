@@ -5,6 +5,19 @@ per chunk, back to back, so they can never observe a chunk present in one
 store but not the other for longer than a single chunk's write time - see
 docs/decisions/0005-vector-and-keyword-store-choice.md's consistency
 discussion.
+
+KNOWN GAP: re-running ingest on a document that now chunks into FEWER
+pieces than a previous run leaves the extra old chunk_ids (e.g. "doc.md#5"
+when the doc now only produces "doc.md#0".."doc.md#3") orphaned in both
+indexes indefinitely - nothing here deletes a chunk_id that the current
+run no longer produces. Harmless for the static seed corpus this PR ships
+(chunk count never changes), but a real blocker for any source that gets
+re-ingested after edits. Fixing it needs either a "list chunk_ids for this
+doc_id" query on both index adapters or a stored high-water-mark per
+document - deferred rather than solved here (docs/design/ingest.md already
+scopes CDC/delete-propagation cadence as an open V2+ question); see
+tests/test_ingest_pipeline.py's characterization test for the exact
+behavior this leaves in place.
 """
 
 from typing import Protocol

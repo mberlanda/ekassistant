@@ -56,6 +56,11 @@ def _split_by_heading(text: str) -> list[str]:
 
 
 def _split_by_paragraph_if_too_long(section: str) -> list[str]:
+    """_MAX_CHARS is a soft target, not a hard cap: a section that is one
+    single paragraph with no internal blank line (so there's no boundary
+    to split on) is returned whole even if it exceeds _MAX_CHARS, rather
+    than being cut at an arbitrary character offset mid-sentence.
+    """
     if len(section) <= _MAX_CHARS:
         return [section]
 
