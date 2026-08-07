@@ -37,10 +37,7 @@ from typing import Protocol
 from ekassistant.index.types import IndexedChunk
 from ekassistant.ingest.chunker import chunk_document
 from ekassistant.ingest.connectors.filesystem import Document
-
-
-class Embedder(Protocol):
-    def embed(self, text: str) -> list[float]: ...
+from ekassistant.models.embedder import Embedder
 
 
 class VectorIndexWriter(Protocol):
