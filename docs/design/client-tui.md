@@ -10,11 +10,15 @@ be a simple TUI."
    as the currently configured mock user (see
    [ADR-0007](../decisions/0007-mock-identity-and-group-lookup.md)),
    optionally switchable per-session for demoing different access levels
-   (e.g. a `:user alice` command).
+   (e.g. a `:user alice` command), at a session-configurable generation
+   temperature (`:temp <0.0-2.0>`, see
+   [model-layer.md](model-layer.md#cite-or-abstain-contract) for why this
+   is an experimentation knob, not a tuned-for-reliability default).
 2. **Render the answer** with its citations clearly attached to the claims
-   they support, or render the abstain response distinctly from a normal
-   answer (so "the system doesn't know" is never visually confusable with
-   "the system answered").
+   they support, its self-reported confidence (when present), or render
+   the abstain response distinctly from a normal answer (so "the system
+   doesn't know" is never visually confusable with "the system
+   answered").
 3. **Nothing else in V1**: no chat history browsing, no source browsing UI,
    no admin functions — those are all reasonable future additions to this
    layer, not V1 scope.

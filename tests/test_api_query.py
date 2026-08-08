@@ -33,11 +33,13 @@ class FakeOllamaClient:
 
     def __init__(self, chat_response: str):
         self._chat_response = chat_response
+        self.temperatures_seen: list[float] = []
 
     def embed(self, text: str) -> list[float]:
         return [0.1, 0.2]
 
-    def chat_json(self, system: str, user: str, json_schema: dict) -> str:
+    def chat_json(self, system: str, user: str, json_schema: dict, temperature: float) -> str:
+        self.temperatures_seen.append(temperature)
         return self._chat_response
 
 
@@ -45,7 +47,7 @@ class RaisingOllamaClient:
     def embed(self, text: str) -> list[float]:
         return [0.1, 0.2]
 
-    def chat_json(self, system: str, user: str, json_schema: dict) -> str:
+    def chat_json(self, system: str, user: str, json_schema: dict, temperature: float) -> str:
         raise ConnectionError("ollama is not reachable")
 
 
@@ -87,7 +89,8 @@ def teardown_function():
 def test_query_returns_grounded_answer_with_citations(tmp_path, monkeypatch):
     response_json = (
         '{"answer": "Yes, MFA is required.", '
-        '"citations": [{"chunk_id": "c1", "source": "policy.md"}], "abstained": false}'
+        '"citations": [{"chunk_id": "c1", "source": "policy.md"}], "abstained": false, '
+        '"confidence": 0.92}'
     )
     _override(
         monkeypatch,
@@ -105,6 +108,84 @@ def test_query_returns_grounded_answer_with_citations(tmp_path, monkeypatch):
     assert body["abstained"] is False
     assert body["answer"] == "Yes, MFA is required."
     assert body["citations"] == [{"chunk_id": "c1", "source": "policy.md"}]
+    assert body["confidence"] == 0.92
+
+
+def test_query_abstain_reports_no_confidence(tmp_path, monkeypatch):
+    _override(
+        monkeypatch,
+        chat_response="should never be read",
+        vector_hits=[],
+        keyword_index_getter=lambda: _real_keyword_index(tmp_path),
+    )
+
+    resp = TestClient(app).post(
+        "/query", json={"question": "does the vpn need mfa?"}, headers={"X-User-Id": "alice"}
+    )
+
+    assert resp.json()["confidence"] is None
+
+
+def test_query_uses_the_configured_default_temperature_when_not_specified(
+    tmp_path, monkeypatch
+):
+    response_json = (
+        '{"answer": "Yes.", "citations": [{"chunk_id": "c1", "source": "policy.md"}], '
+        '"abstained": false, "confidence": 0.5}'
+    )
+    ollama_client = FakeOllamaClient(response_json)
+    app.dependency_overrides[get_ollama_client] = lambda: ollama_client
+    app.dependency_overrides[get_vector_index] = lambda: FakeVectorIndex([_hit("c1")])
+    app.dependency_overrides[get_reranker] = lambda: PassthroughReranker()
+    monkeypatch.setattr(
+        "ekassistant.api.main.get_keyword_index", lambda: _real_keyword_index(tmp_path)
+    )
+
+    TestClient(app).post(
+        "/query", json={"question": "does the vpn need mfa?"}, headers={"X-User-Id": "alice"}
+    )
+
+    assert ollama_client.temperatures_seen == [get_settings().ollama_temperature]
+
+
+def test_query_temperature_override_is_passed_through(tmp_path, monkeypatch):
+    response_json = (
+        '{"answer": "Yes.", "citations": [{"chunk_id": "c1", "source": "policy.md"}], '
+        '"abstained": false, "confidence": 0.5}'
+    )
+    ollama_client = FakeOllamaClient(response_json)
+    app.dependency_overrides[get_ollama_client] = lambda: ollama_client
+    app.dependency_overrides[get_vector_index] = lambda: FakeVectorIndex([_hit("c1")])
+    app.dependency_overrides[get_reranker] = lambda: PassthroughReranker()
+    monkeypatch.setattr(
+        "ekassistant.api.main.get_keyword_index", lambda: _real_keyword_index(tmp_path)
+    )
+
+    resp = TestClient(app).post(
+        "/query",
+        json={"question": "does the vpn need mfa?", "temperature": 1.1},
+        headers={"X-User-Id": "alice"},
+    )
+
+    assert resp.status_code == 200
+    assert ollama_client.temperatures_seen == [1.1]
+
+
+def test_query_rejects_an_out_of_range_temperature(tmp_path, monkeypatch):
+    _override(
+        monkeypatch,
+        chat_response="should never be read",
+        vector_hits=[],
+        keyword_index_getter=lambda: _real_keyword_index(tmp_path),
+    )
+
+    resp = TestClient(app).post(
+        "/query",
+        json={"question": "does the vpn need mfa?", "temperature": 5.0},
+        headers={"X-User-Id": "alice"},
+    )
+
+    assert resp.status_code == 422
 
 
 def test_query_abstains_when_nothing_is_retrieved(tmp_path, monkeypatch):
@@ -168,7 +249,7 @@ def test_query_reaches_the_real_keyword_index_via_its_direct_call(tmp_path, monk
     real_index.close()
     response_json = (
         '{"answer": "Yes.", "citations": [{"chunk_id": "c1", "source": "policy.md"}], '
-        '"abstained": false}'
+        '"abstained": false, "confidence": 0.5}'
     )
     _override(
         monkeypatch,
@@ -217,7 +298,7 @@ def test_concurrent_requests_do_not_hit_sqlite_cross_thread_errors(tmp_path, mon
     # sequential .post() calls never exercise this, since they only ever
     # run one request at a time - this drives real concurrency (asyncio
     # .gather over the ASGI app) against the current, fixed code.
-    response_json = '{"answer": "", "citations": [], "abstained": true}'
+    response_json = '{"answer": "", "citations": [], "abstained": true, "confidence": 0.1}'
     _override(
         monkeypatch,
         chat_response=response_json,

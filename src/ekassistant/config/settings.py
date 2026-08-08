@@ -17,6 +17,14 @@ class Settings(BaseSettings):
     ollama_base_url: str = "http://localhost:11434"
     ollama_model: str = "llama3.2:1b"
     ollama_embed_model: str = "nomic-embed-text"
+    # Default generation temperature (see models/generation.py's
+    # DEFAULT_TEMPERATURE, which duplicates this value and explains why
+    # it matches Ollama's own stock default rather than a lower value -
+    # a lower default was tried and measured worse in repeated live
+    # testing, not just left at the stock value out of caution).
+    # Overridable per-request (see QueryRequest.temperature / the TUI's
+    # `:temp` command).
+    ollama_temperature: float = 0.8
 
     # Vector index (see docs/decisions/0005). embedding_dimensions must match
     # whatever ollama_embed_model actually outputs (768 for nomic-embed-text,

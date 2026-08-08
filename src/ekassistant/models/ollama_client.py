@@ -29,7 +29,7 @@ class OllamaClient:
         response = self._client.embed(model=self._embed_model, input=texts)
         return list(response["embeddings"])
 
-    def chat_json(self, system: str, user: str, json_schema: dict) -> str:
+    def chat_json(self, system: str, user: str, json_schema: dict, temperature: float) -> str:
         response = self._client.chat(
             model=self._chat_model,
             messages=[
@@ -37,5 +37,6 @@ class OllamaClient:
                 {"role": "user", "content": user},
             ],
             format=json_schema,
+            options={"temperature": temperature},
         )
         return response["message"]["content"]

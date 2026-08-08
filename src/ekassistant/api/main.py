@@ -10,7 +10,7 @@ from typing import Annotated
 
 import uvicorn
 from fastapi import Depends, FastAPI, Header
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from ekassistant.config.settings import get_settings
 from ekassistant.identity.store import IdentityStore
@@ -75,6 +75,15 @@ def whoami(x_user_id: str | None = Header(default=None)) -> dict:
 
 class QueryRequest(BaseModel):
     question: str
+    temperature: float | None = Field(
+        default=None,
+        ge=0.0,
+        le=2.0,
+        description=(
+            "Generation temperature override for this request. Omit to use "
+            "Settings.ollama_temperature (see the TUI's `:temp` command)."
+        ),
+    )
 
 
 class CitationResponse(BaseModel):
@@ -86,6 +95,9 @@ class QueryResponse(BaseModel):
     answer: str
     citations: list[CitationResponse]
     abstained: bool
+    confidence: float | None
+    """The model's raw, unvalidated self-reported confidence - see
+    GroundedAnswer.confidence. None on any abstain."""
 
 
 @app.post("/query")
@@ -120,6 +132,9 @@ def query(
     user_id = x_user_id or settings.default_user
     groups = get_identity_store().groups_for(user_id)
     keyword_index = get_keyword_index()
+    temperature = (
+        request.temperature if request.temperature is not None else settings.ollama_temperature
+    )
 
     # ollama_client is passed twice on purpose, not a copy-paste slip:
     # OllamaClient implements both the Embedder and ChatClient protocols
@@ -137,6 +152,7 @@ def query(
         keyword_index=keyword_index,
         reranker=reranker,
         chat_client=ollama_client,
+        temperature=temperature,
     )
 
     record_run(
@@ -147,9 +163,11 @@ def query(
             retrieved_chunk_ids=result.retrieved_chunk_ids,
             retrieval_ms=result.retrieval_ms,
             generation_ms=result.generation_ms,
+            temperature=temperature,
             abstained=result.answer.abstained,
             abstain_reason=result.answer.reason,
             citation_count=len(result.answer.citations),
+            confidence=result.answer.confidence,
             chat_model=settings.ollama_model,
             embed_model=settings.ollama_embed_model,
         ),
@@ -163,6 +181,7 @@ def query(
             for c in result.answer.citations
         ],
         abstained=result.answer.abstained,
+        confidence=result.answer.confidence,
     )
 
 

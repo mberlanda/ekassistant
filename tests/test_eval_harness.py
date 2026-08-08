@@ -52,7 +52,7 @@ class FakeChatClient:
     def __init__(self, responses: list[str]):
         self._responses = iter(responses)
 
-    def chat_json(self, system: str, user: str, json_schema: dict) -> str:
+    def chat_json(self, system: str, user: str, json_schema: dict, temperature: float) -> str:
         return next(self._responses)
 
 
@@ -145,8 +145,8 @@ def test_measure_generation_reports_abstain_rate():
     responses = [
         '{"answer": "Yes.", '
         '"citations": [{"chunk_id": "doc-a.md#0", "source": "doc-a.md"}], '
-        '"abstained": false}',
-        '{"answer": "", "citations": [], "abstained": true}',
+        '"abstained": false, "confidence": 0.75}',
+        '{"answer": "", "citations": [], "abstained": true, "confidence": 0.1}',
     ]
     keyword_index = FakeKeywordIndexBySource({"doc-a.md": ["engineering"]})
 
