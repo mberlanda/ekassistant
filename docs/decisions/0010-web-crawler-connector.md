@@ -102,6 +102,39 @@ rest of the target (and every other document source) still ingests.
   gap for JS-heavy sites, deferred rather than pulling in a headless
   browser dependency for a POC.
 
+## Amendment (2026-08-08): URL and content dedup
+
+Live-testing this connector against a real `same_origin` target
+(`mauroberlanda.substack.com`) found several posts indexed twice: once
+under a bare URL, once under a `?utm_source=...`-tagged variant of the
+same link (blog platforms commonly tag their own internal/newsletter
+links this way). Each copy consumed a separate slot in retrieval's fixed
+top-k, wasting it on duplicate content instead of distinct documents.
+This is a bug fix to the connector decided above, not a new architectural
+decision, so it's recorded here rather than as a new ADR:
+
+- **URL normalization now strips a small, known denylist of
+  tracking/attribution query params** (`utm_*`, `fbclid`, `gclid`,
+  `msclkid`, `mc_cid`/`mc_eid`, `igshid`, `ref_src`) in addition to the
+  fragment-stripping this ADR already covered, so a tracking-tagged link
+  variant of a page normalizes to the same URL as its bare form and
+  dedupes before ever being double-fetched. Deliberately a narrow
+  denylist, not "strip every query param" - an unrecognized param may be
+  load-bearing (e.g. genuine pagination or an article ID), and
+  over-stripping could wrongly merge two actually-different pages.
+- **A content-based dedup safety net** (`_dedup_by_content`) runs once
+  after all configured targets finish loading: if two documents (from the
+  same target or different targets) have byte-identical extracted text,
+  the first-encountered copy is kept and the rest are dropped, recorded
+  in `skipped` with reason `"duplicate content of <url>"` rather than
+  silently discarded. This catches duplicates URL normalization can't -
+  e.g. two independently configured targets that converge on the same
+  canonical content via URLs sharing no common structure.
+
+This doesn't change the Decision, Alternatives, or Tradeoffs above - the
+connector's shape, ACL model, and crawl modes are unchanged. It only
+tightens what counts as "the same document" during ingestion.
+
 ## Consequences
 
 - `docs/design/ingest.md` gains a crawler subsection describing this

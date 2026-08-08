@@ -77,6 +77,12 @@ unmapped domain is never fetched) - see ADR-0010 for why a single global
 default group was rejected. `config/crawl_targets.yaml` ships empty; no
 domain is baked into the connector itself.
 
+URL normalization strips both fragments and known tracking query params
+(`utm_*`, `fbclid`, `gclid`, etc.), and a content-based dedup pass runs
+after all targets load, dropping byte-identical duplicates reached via
+different URLs - see [ADR-0010's amendment](../decisions/0010-web-crawler-connector.md#amendment-2026-08-08-url-and-content-dedup)
+for the live bug (double-indexed blog posts) that motivated it.
+
 ## Tradeoffs
 
 - **Structure-aware chunking vs. fixed-size chunking**: fixed-size (e.g.

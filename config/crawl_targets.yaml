@@ -27,3 +27,9 @@
 #   mode: same_origin
 #   max_depth: 2
 #   max_pages: 50
+#
+# - seed_url: "https://mauroberlanda.substack.com/"
+#   allowed_groups: [all-staff]
+#   mode: same_origin
+#   max_depth: 2
+#   max_pages: 50
