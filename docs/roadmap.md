@@ -40,6 +40,15 @@ roadmap item is complete; `config/crawl_targets.yaml` ships empty, so
 crawling a real site is one config entry away whenever a concrete target
 is chosen.
 
+## Post-V1 enhancements
+
+Small, standalone additions made after V1's scope closed out, each still
+following the branch + two-review-pass + merge workflow above.
+
+| Component | Docs | Status |
+|---|---|---|
+| Generation temperature control + raw model confidence score (`:temp` TUI command, `POST /query`'s `temperature`/`confidence` fields) | [docs/design/model-layer.md](design/model-layer.md#cite-or-abstain-contract), [docs/design/client-tui.md](design/client-tui.md) | Done, tested, verified live against the real Ollama server ([PR #10](https://github.com/mberlanda/ekassistant/pull/10)). Prompted by investigating a real TUI abstain on good retrieved context, traced to `llama3.2:1b`'s documented (ADR-0004) run-to-run flakiness at the cite-or-abstain judgment, not a pipeline bug. Two live-tested findings worth noting since both contradicted the initial hypothesis: (1) `confidence` is deliberately **optional**, not a required 4th schema field - requiring it measurably increased the model's abstain rate (0/6 successful answers required vs. 6/6 optional, same repeated question); (2) `DEFAULT_TEMPERATURE` ended up matching Ollama's own stock default (0.8), **not** a lower "steadier" value - a lower default (0.2) was tried first and measured *worse* under repeated real sampling (1/10 successes vs. 0.8's 3-6/10) rather than more reliable, so the knob ships as a caller-side experimentation aid, not a claimed reliability fix. Independent review found two issues (a stale comment contradicting the optional-confidence design, a formatting slip in the new TUI lines), both fixed. `tests/test_tui.py` is new - no TUI test coverage existed before this PR |
+
 Each component above depended on the ones before it (retrieval needed
 indexes populated by ingest, which needed the model layer for embedding;
 orchestration needed retrieval; eval needed orchestration to have
