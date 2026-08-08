@@ -10,7 +10,7 @@ import time
 from dataclasses import dataclass
 
 from ekassistant.models.embedder import Embedder
-from ekassistant.models.generation import ChatClient, generate_answer
+from ekassistant.models.generation import DEFAULT_TEMPERATURE, ChatClient, generate_answer
 from ekassistant.models.schema import GroundedAnswer
 from ekassistant.retrieval.reranker import Reranker
 from ekassistant.retrieval.retriever import KeywordSearcher, VectorSearcher, retrieve
@@ -39,6 +39,7 @@ def answer_question(
     keyword_index: KeywordSearcher,
     reranker: Reranker,
     chat_client: ChatClient,
+    temperature: float = DEFAULT_TEMPERATURE,
 ) -> PipelineResult:
     retrieval_start = time.monotonic()
     context_chunks = retrieve(
@@ -47,7 +48,7 @@ def answer_question(
     retrieval_ms = (time.monotonic() - retrieval_start) * 1000
 
     generation_start = time.monotonic()
-    answer = generate_answer(question, context_chunks, chat_client)
+    answer = generate_answer(question, context_chunks, chat_client, temperature)
     generation_ms = (time.monotonic() - generation_start) * 1000
 
     return PipelineResult(

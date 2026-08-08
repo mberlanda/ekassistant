@@ -43,9 +43,11 @@ class RunTrace:
     retrieved_chunk_ids: list[str]
     retrieval_ms: float
     generation_ms: float
+    temperature: float
     abstained: bool
     abstain_reason: str | None
     citation_count: int
+    confidence: float | None
     chat_model: str
     embed_model: str
     timestamp: float = field(default_factory=time.time)

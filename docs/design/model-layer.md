@@ -38,7 +38,8 @@ The LLM is prompted to return a structured result:
 {
   "answer": "<text, or empty if abstaining>",
   "citations": [{"chunk_id": "...", "source": "..."}],
-  "abstained": true | false
+  "abstained": true | false,
+  "confidence": <0.0-1.0, optional>
 }
 ```
 
@@ -53,6 +54,31 @@ caller:
   provided context), the system treats the response as an abstain, not as
   a best-effort answer — silently downgrading a broken citation to "no
   citation" would defeat the grounding guarantee.
+
+`confidence` is the model's own, unvalidated self-assessment of how well
+the context supports its answer — passed through to the caller as-is on
+a non-abstained answer, `null` on any abstain (including a
+citation-validation downgrade: if the response wasn't trusted enough to
+surface as an answer, its self-reported confidence about that answer
+isn't trusted either). Deliberately **optional**, not a required part of
+the schema: an earlier version made it required, and live testing found
+that a 4th required field measurably pushed this small local model toward
+abstaining more often (reproduced at 0/6 successful answers on a
+previously-reliable question with it required, vs. 6/6 with it optional —
+the model still voluntarily included it every time once the requirement
+was lifted). See `ModelResponse.confidence`'s docstring in
+`models/schema.py`.
+
+Generation temperature is also caller-overridable (`POST /query`'s
+optional `temperature` field, or the TUI's `:temp` command), defaulting
+to `Settings.ollama_temperature` (see `models/generation.py`'s
+`DEFAULT_TEMPERATURE`, which matches Ollama's own stock default). This
+was added expecting a lower default to reduce the model's run-to-run
+cite-or-abstain flakiness; repeated live testing disproved that
+specifically (a lower default measured *worse*, and no fixed temperature
+reliably fixed a noisy-context case), so the knob is kept as an
+experimentation aid rather than tuned to a claimed-better default — see
+`DEFAULT_TEMPERATURE`'s docstring for the actual numbers.
 
 ## Tradeoffs
 

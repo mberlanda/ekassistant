@@ -25,7 +25,10 @@ SYSTEM_PROMPT = (
     "be supported by at least one cited chunk_id from the context. If the "
     "context does not contain enough information to answer, set abstained "
     "to true, leave answer empty, and cite nothing. Never invent a chunk_id "
-    "that is not present in the provided context."
+    "that is not present in the provided context. Always also report a "
+    "confidence score between 0.0 and 1.0 reflecting how well the provided "
+    "context supports your answer (1.0 = fully and directly supported, "
+    "0.0 = no support at all)."
 )
 
 # GroundedAnswer.reason values - see docs/design/observability.md's
@@ -38,6 +41,24 @@ REASON_BLANK_ANSWER = "blank_answer"
 REASON_NO_CITATIONS = "no_citations"
 REASON_INVALID_CITATION = "invalid_citation"
 
+# Matches Ollama's own stock default. A lower default was tried first
+# (see docs/roadmap.md) on the theory that less sampling randomness would
+# make the cite-or-abstain judgment more repeatable - live testing across
+# repeated real runs disproved that: at temperature 0.2 the same
+# question/context succeeded 1/10 times, worse than 0.8's 3-6/10 across
+# repeated samples (a wide range itself - this small model's run-to-run
+# variance at ANY fixed temperature is large enough that no single value
+# reliably "fixes" it). Kept at Ollama's default rather than guessing a
+# different number without evidence for one; the real value of this knob
+# is letting a caller experiment (see the TUI's `:temp`), not a claimed
+# fix for model unreliability - that's tracked as a model-quality
+# characteristic (ADR-0004), not something a temperature setting solves.
+# Duplicated (not imported) from Settings.ollama_temperature's default:
+# the model layer must have a sane default even for a caller (tests, the
+# eval harness) that never constructs a Settings instance, and this layer
+# intentionally doesn't depend on config/.
+DEFAULT_TEMPERATURE = 0.8
+
 
 def _abstain(reason: str) -> GroundedAnswer:
     # A fresh instance every call: GroundedAnswer.citations is a mutable
@@ -47,7 +68,7 @@ def _abstain(reason: str) -> GroundedAnswer:
 
 
 class ChatClient(Protocol):
-    def chat_json(self, system: str, user: str, json_schema: dict) -> str: ...
+    def chat_json(self, system: str, user: str, json_schema: dict, temperature: float) -> str: ...
 
 
 def _format_context(chunks: list[ContextChunk]) -> str:
@@ -62,13 +83,18 @@ def _format_context(chunks: list[ContextChunk]) -> str:
 
 
 def generate_answer(
-    question: str, context_chunks: list[ContextChunk], client: ChatClient
+    question: str,
+    context_chunks: list[ContextChunk],
+    client: ChatClient,
+    temperature: float = DEFAULT_TEMPERATURE,
 ) -> GroundedAnswer:
     if not context_chunks:
         return _abstain(REASON_EMPTY_CONTEXT)
 
     user_prompt = f"Context:\n{_format_context(context_chunks)}\n\nQuestion: {question}"
-    raw = client.chat_json(SYSTEM_PROMPT, user_prompt, ModelResponse.model_json_schema())
+    raw = client.chat_json(
+        SYSTEM_PROMPT, user_prompt, ModelResponse.model_json_schema(), temperature=temperature
+    )
 
     try:
         candidate = ModelResponse.model_validate_json(raw)
@@ -104,5 +130,9 @@ def _validate_citations(
         for citation in candidate.citations
     ]
     return GroundedAnswer(
-        answer=candidate.answer, citations=trusted_citations, abstained=False, reason=None
+        answer=candidate.answer,
+        citations=trusted_citations,
+        abstained=False,
+        reason=None,
+        confidence=candidate.confidence,
     )

@@ -18,8 +18,10 @@ class FakeUnderlyingClient:
         texts = input if isinstance(input, list) else [input]
         return {"embeddings": [[0.1, 0.2] for _ in texts]}
 
-    def chat(self, model: str, messages, format):
-        self.chat_calls.append({"model": model, "messages": messages, "format": format})
+    def chat(self, model: str, messages, format, options=None):
+        self.chat_calls.append(
+            {"model": model, "messages": messages, "format": format, "options": options}
+        )
         return {"message": {"content": '{"answer": "", "citations": [], "abstained": true}'}}
 
 
@@ -57,7 +59,7 @@ def test_embed_batch_returns_one_vector_per_input(monkeypatch):
 def test_chat_json_uses_configured_chat_model_and_schema(monkeypatch):
     client, fake = _make_client(monkeypatch)
     schema = {"type": "object"}
-    content = client.chat_json(system="sys", user="usr", json_schema=schema)
+    content = client.chat_json(system="sys", user="usr", json_schema=schema, temperature=0.3)
     assert content == '{"answer": "", "citations": [], "abstained": true}'
     assert fake.chat_calls[0]["model"] == "test-chat-model"
     assert fake.chat_calls[0]["format"] == schema
@@ -65,3 +67,9 @@ def test_chat_json_uses_configured_chat_model_and_schema(monkeypatch):
         {"role": "system", "content": "sys"},
         {"role": "user", "content": "usr"},
     ]
+
+
+def test_chat_json_passes_the_temperature_through_as_an_ollama_option(monkeypatch):
+    client, fake = _make_client(monkeypatch)
+    client.chat_json(system="sys", user="usr", json_schema={"type": "object"}, temperature=0.3)
+    assert fake.chat_calls[0]["options"] == {"temperature": 0.3}

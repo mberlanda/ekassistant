@@ -27,8 +27,10 @@ class FakeKeywordIndex:
 class FakeChatClient:
     def __init__(self, response: str):
         self._response = response
+        self.temperatures_seen: list[float] = []
 
-    def chat_json(self, system: str, user: str, json_schema: dict) -> str:
+    def chat_json(self, system: str, user: str, json_schema: dict, temperature: float) -> str:
+        self.temperatures_seen.append(temperature)
         return self._response
 
 
@@ -41,7 +43,7 @@ def _hit(chunk_id: str) -> SearchResult:
 def test_answer_question_grounds_the_answer_in_retrieved_context():
     response = (
         '{"answer": "Yes.", "citations": [{"chunk_id": "c1", "source": "policy.md"}], '
-        '"abstained": false}'
+        '"abstained": false, "confidence": 0.85}'
     )
     result = answer_question(
         "does the vpn need mfa?",
@@ -61,7 +63,7 @@ def test_answer_question_grounds_the_answer_in_retrieved_context():
 def test_answer_question_reports_retrieval_hit_count_and_stage_timing():
     response = (
         '{"answer": "Yes.", "citations": [{"chunk_id": "c1", "source": "policy.md"}], '
-        '"abstained": false}'
+        '"abstained": false, "confidence": 0.85}'
     )
     result = answer_question(
         "does the vpn need mfa?",
@@ -118,7 +120,7 @@ def test_answer_question_downgrades_citation_outside_retrieved_context_to_abstai
     # must be downgraded to abstain, not passed through.
     response = (
         '{"answer": "Yes.", "citations": [{"chunk_id": "not-retrieved", "source": "x.md"}], '
-        '"abstained": false}'
+        '"abstained": false, "confidence": 0.85}'
     )
     result = answer_question(
         "does the vpn need mfa?",
@@ -135,3 +137,62 @@ def test_answer_question_downgrades_citation_outside_retrieved_context_to_abstai
     # so retrieved_chunk_ids still reports it as a real retrieval hit,
     # separate from generation's decision about what to do with it.
     assert result.retrieved_chunk_ids == ["c1"]
+
+
+def test_answer_question_reports_the_models_confidence_on_a_grounded_answer():
+    response = (
+        '{"answer": "Yes.", "citations": [{"chunk_id": "c1", "source": "policy.md"}], '
+        '"abstained": false, "confidence": 0.85}'
+    )
+    result = answer_question(
+        "does the vpn need mfa?",
+        ["engineering"],
+        FakeEmbedder(),
+        FakeVectorIndex([_hit("c1")]),
+        FakeKeywordIndex([]),
+        PassthroughReranker(),
+        FakeChatClient(response),
+    )
+
+    assert result.answer.confidence == 0.85
+
+
+def test_answer_question_passes_the_temperature_through_to_the_chat_client():
+    response = (
+        '{"answer": "Yes.", "citations": [{"chunk_id": "c1", "source": "policy.md"}], '
+        '"abstained": false, "confidence": 0.85}'
+    )
+    chat_client = FakeChatClient(response)
+    answer_question(
+        "does the vpn need mfa?",
+        ["engineering"],
+        FakeEmbedder(),
+        FakeVectorIndex([_hit("c1")]),
+        FakeKeywordIndex([]),
+        PassthroughReranker(),
+        chat_client,
+        temperature=0.9,
+    )
+
+    assert chat_client.temperatures_seen == [0.9]
+
+
+def test_answer_question_uses_the_default_temperature_when_not_specified():
+    from ekassistant.models.generation import DEFAULT_TEMPERATURE
+
+    response = (
+        '{"answer": "Yes.", "citations": [{"chunk_id": "c1", "source": "policy.md"}], '
+        '"abstained": false, "confidence": 0.85}'
+    )
+    chat_client = FakeChatClient(response)
+    answer_question(
+        "does the vpn need mfa?",
+        ["engineering"],
+        FakeEmbedder(),
+        FakeVectorIndex([_hit("c1")]),
+        FakeKeywordIndex([]),
+        PassthroughReranker(),
+        chat_client,
+    )
+
+    assert chat_client.temperatures_seen == [DEFAULT_TEMPERATURE]

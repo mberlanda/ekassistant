@@ -12,9 +12,11 @@ def _trace(**overrides) -> RunTrace:
         retrieved_chunk_ids=["c1", "c2"],
         retrieval_ms=12.5,
         generation_ms=340.2,
+        temperature=0.2,
         abstained=False,
         abstain_reason=None,
         citation_count=1,
+        confidence=0.9,
         chat_model="llama3.2:1b",
         embed_model="nomic-embed-text",
     )

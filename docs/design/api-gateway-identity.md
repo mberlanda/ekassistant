@@ -22,12 +22,14 @@ Reference spine item b. The single entry point every client (the
    ID resolves to an empty group set (fail closed — sees nothing), never
    to a default/admin group.
 4. **Request/response shape**: defines the stable contract clients code
-   against — `POST /query` with `{question}` in the body and identity via
+   against — `POST /query` with `{question, temperature?}` in the body
+   (temperature is optional, defaulting to `Settings.ollama_temperature`
+   when omitted — see [model-layer.md](model-layer.md)) and identity via
    the `X-User-Id` header (same header `/whoami` uses, per item 2 above —
    there is no separate `user_id` field in the body), returning
-   `{answer, citations[], abstained}` — so the [TUI](client-tui.md) (or
-   any future client) never needs to know about retrieval, ranking, or
-   model internals.
+   `{answer, citations[], abstained, confidence}` — so the
+   [TUI](client-tui.md) (or any future client) never needs to know about
+   retrieval, ranking, or model internals.
 
 ## Sample identity data (ships with the repo for demos/tests)
 
