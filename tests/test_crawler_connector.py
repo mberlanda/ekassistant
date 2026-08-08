@@ -395,3 +395,227 @@ def test_malformed_allowed_groups_raises_a_clear_error(tmp_path):
 
     with pytest.raises(ValueError, match="allowed_groups must be a list of strings"):
         connector.load_documents()
+
+
+def test_links_differing_only_by_a_tracking_param_dedupe_to_one_document(tmp_path):
+    # Found live: a same_origin crawl of a real blog indexed several
+    # posts twice, once under a bare URL and once under a
+    # utm_source-tagged variant of the same link.
+    http_client = FakeHttpClient(
+        {
+            "https://example.com/start": FakeResponse(
+                200,
+                _page(
+                    "Start",
+                    "https://example.com/post",
+                    "https://example.com/post?utm_source=newsletter&utm_medium=email",
+                ),
+            ),
+            "https://example.com/post": FakeResponse(200, _page("Post")),
+        }
+    )
+    config_path = _write_config(
+        tmp_path,
+        [
+            {
+                "seed_url": "https://example.com/start",
+                "allowed_groups": ["engineering"],
+                "mode": "same_origin",
+                "max_depth": 2,
+                "max_pages": 10,
+            }
+        ],
+    )
+    connector = WebCrawlerConnector(config_path=config_path, http_client=http_client)
+
+    documents = connector.load_documents()
+
+    assert {doc.source for doc in documents} == {
+        "https://example.com/start",
+        "https://example.com/post",
+    }
+    assert http_client.requested_urls.count("https://example.com/post") == 1
+
+
+def test_a_tracking_param_seed_url_is_normalized_before_fetching(tmp_path):
+    # The stripping applies to the configured seed_url itself, not just
+    # to links discovered while crawling.
+    http_client = FakeHttpClient({"https://example.com/start": FakeResponse(200, _page("Start"))})
+    config_path = _write_config(
+        tmp_path,
+        [
+            {
+                "seed_url": "https://example.com/start?utm_campaign=launch",
+                "allowed_groups": ["engineering"],
+            }
+        ],
+    )
+    connector = WebCrawlerConnector(config_path=config_path, http_client=http_client)
+
+    documents = connector.load_documents()
+
+    assert documents[0].source == "https://example.com/start"
+    assert http_client.requested_urls == [
+        "https://example.com/robots.txt",
+        "https://example.com/start",
+    ]
+
+
+def test_a_non_tracking_query_param_is_preserved_not_stripped(tmp_path):
+    # Only the known tracking-param denylist is stripped - an
+    # unrecognized param (e.g. real pagination) must survive, since
+    # dropping it could wrongly merge two actually-different pages.
+    http_client = FakeHttpClient(
+        {
+            "https://example.com/start": FakeResponse(
+                200, _page("Start", "https://example.com/list?page=2")
+            ),
+            "https://example.com/list?page=2": FakeResponse(200, _page("Page Two")),
+        }
+    )
+    config_path = _write_config(
+        tmp_path,
+        [
+            {
+                "seed_url": "https://example.com/start",
+                "allowed_groups": ["engineering"],
+                "mode": "same_origin",
+                "max_depth": 2,
+                "max_pages": 10,
+            }
+        ],
+    )
+    connector = WebCrawlerConnector(config_path=config_path, http_client=http_client)
+
+    documents = connector.load_documents()
+
+    assert {doc.source for doc in documents} == {
+        "https://example.com/start",
+        "https://example.com/list?page=2",
+    }
+
+
+def test_two_different_targets_converging_on_identical_content_dedupe(tmp_path):
+    # The URL-normalization fix above only helps when the duplicate is
+    # reachable through a tracking-param variant of the SAME URL. This is
+    # the safety net for the other case: two independently configured
+    # targets whose fetched, extracted text is identical even though the
+    # URLs share nothing in common (e.g. a genuine alternate/canonical
+    # URL for the same article).
+    http_client = FakeHttpClient(
+        {
+            "https://example.com/original": FakeResponse(200, _page("Same Content")),
+            "https://mirror.example.org/copy": FakeResponse(200, _page("Same Content")),
+        }
+    )
+    config_path = _write_config(
+        tmp_path,
+        [
+            {"seed_url": "https://example.com/original", "allowed_groups": ["engineering"]},
+            {"seed_url": "https://mirror.example.org/copy", "allowed_groups": ["engineering"]},
+        ],
+    )
+    connector = WebCrawlerConnector(config_path=config_path, http_client=http_client)
+
+    documents = connector.load_documents()
+
+    assert len(documents) == 1
+    assert documents[0].source == "https://example.com/original"
+    assert connector.skipped == [
+        ("https://mirror.example.org/copy", "duplicate content of https://example.com/original")
+    ]
+
+
+def test_content_dedup_does_not_drop_two_genuinely_different_pages(tmp_path):
+    http_client = FakeHttpClient(
+        {
+            "https://example.com/a": FakeResponse(200, _page("Page A")),
+            "https://example.com/b": FakeResponse(200, _page("Page B")),
+        }
+    )
+    config_path = _write_config(
+        tmp_path,
+        [
+            {"seed_url": "https://example.com/a", "allowed_groups": ["engineering"]},
+            {"seed_url": "https://example.com/b", "allowed_groups": ["engineering"]},
+        ],
+    )
+    connector = WebCrawlerConnector(config_path=config_path, http_client=http_client)
+
+    documents = connector.load_documents()
+
+    assert {doc.source for doc in documents} == {"https://example.com/a", "https://example.com/b"}
+    assert connector.skipped == []
+
+
+def test_content_dedup_does_not_merge_two_pages_that_both_extract_to_empty_text(tmp_path):
+    # Two pages that both fail structural extraction (e.g. JS-rendered
+    # pages with no <h1>-<h6>/<p> content - see ADR-0010's no-JS-rendering
+    # tradeoff) both produce Document.text == "". They are NOT duplicates
+    # of each other, just two separate failed extractions - merging them
+    # would produce a misleading "duplicate content" skip reason.
+    js_shell = "<html><body><div id='app'></div></body></html>"
+    http_client = FakeHttpClient(
+        {
+            "https://example.com/a": FakeResponse(200, js_shell),
+            "https://example.com/b": FakeResponse(200, js_shell),
+        }
+    )
+    config_path = _write_config(
+        tmp_path,
+        [
+            {"seed_url": "https://example.com/a", "allowed_groups": ["engineering"]},
+            {"seed_url": "https://example.com/b", "allowed_groups": ["engineering"]},
+        ],
+    )
+    connector = WebCrawlerConnector(config_path=config_path, http_client=http_client)
+
+    documents = connector.load_documents()
+
+    assert {doc.source for doc in documents} == {"https://example.com/a", "https://example.com/b"}
+    assert all(doc.text == "" for doc in documents)
+    assert connector.skipped == []
+
+
+def test_content_dedup_applies_within_a_single_same_origin_crawl(tmp_path):
+    # The cross-target case is covered above; this covers the more
+    # common real-world shape - two distinct URLs on the SAME crawled
+    # origin (e.g. a canonical page and a print-view mirror of it) that
+    # happen to extract to identical text.
+    http_client = FakeHttpClient(
+        {
+            "https://example.com/start": FakeResponse(
+                200,
+                _page(
+                    "Start",
+                    "https://example.com/post",
+                    "https://example.com/post/print",
+                ),
+            ),
+            "https://example.com/post": FakeResponse(200, _page("Post")),
+            "https://example.com/post/print": FakeResponse(200, _page("Post")),
+        }
+    )
+    config_path = _write_config(
+        tmp_path,
+        [
+            {
+                "seed_url": "https://example.com/start",
+                "allowed_groups": ["engineering"],
+                "mode": "same_origin",
+                "max_depth": 2,
+                "max_pages": 10,
+            }
+        ],
+    )
+    connector = WebCrawlerConnector(config_path=config_path, http_client=http_client)
+
+    documents = connector.load_documents()
+
+    assert {doc.source for doc in documents} == {
+        "https://example.com/start",
+        "https://example.com/post",
+    }
+    assert connector.skipped == [
+        ("https://example.com/post/print", "duplicate content of https://example.com/post")
+    ]

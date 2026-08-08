@@ -19,7 +19,7 @@ from collections import deque
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Protocol
-from urllib.parse import urljoin, urlsplit, urlunsplit
+from urllib.parse import parse_qsl, urlencode, urljoin, urlsplit, urlunsplit
 from urllib.robotparser import RobotFileParser
 
 import httpx
@@ -32,6 +32,35 @@ from ekassistant.ingest.parsers.html_parser import parse_html
 _USER_AGENT = "ekassistant-crawler/1.0 (+see docs/decisions/0010-web-crawler-connector.md)"
 _REQUEST_TIMEOUT_SECONDS = 10.0
 _VALID_MODES = {"single_page", "same_origin"}
+
+# Query params known to carry tracking/attribution metadata rather than
+# identify distinct content - stripped during normalization so e.g.
+# "/post" and "/post?utm_source=newsletter" dedupe to one document
+# instead of being crawled and indexed as two copies of the same page
+# (found live: a same_origin crawl of a real blog indexed several posts
+# twice, once under a bare URL and once under a utm_source-tagged variant
+# of the same link, wasting retrieval's fixed top-k slots on duplicate
+# content). Deliberately a narrow, well-known denylist, not "strip every
+# query param" - an unrecognized param might be load-bearing (e.g. a
+# genuine pagination or article-id parameter), and dropping it could
+# silently merge two actually-different pages into one.
+_TRACKING_PARAMS = frozenset(
+    {
+        "utm_source",
+        "utm_medium",
+        "utm_campaign",
+        "utm_term",
+        "utm_content",
+        "utm_id",
+        "fbclid",
+        "gclid",
+        "msclkid",
+        "mc_cid",
+        "mc_eid",
+        "igshid",
+        "ref_src",
+    }
+)
 
 
 class Response(Protocol):
@@ -50,9 +79,19 @@ def _origin(url: str) -> str:
 
 def _normalize_url(url: str) -> str:
     # Strips the fragment (an in-page anchor, not a distinct resource) so
-    # "page#section-a" and "page#section-b" dedupe to one document.
+    # "page#section-a" and "page#section-b" dedupe to one document, and
+    # strips known tracking query params (see _TRACKING_PARAMS) so a
+    # tagged link variant dedupes with the same page's bare URL. Query
+    # param order among the params that remain is preserved, since some
+    # servers (rarely, but not never) are order-sensitive.
     parts = urlsplit(url)
-    return urlunsplit((parts.scheme, parts.netloc, parts.path, parts.query, ""))
+    kept_params = [
+        (key, value)
+        for key, value in parse_qsl(parts.query, keep_blank_values=True)
+        if key not in _TRACKING_PARAMS
+    ]
+    query = urlencode(kept_params)
+    return urlunsplit((parts.scheme, parts.netloc, parts.path, query, ""))
 
 
 def _extract_same_origin_links(html: str, base_url: str, origin: str) -> list[str]:
@@ -168,7 +207,39 @@ class WebCrawlerConnector:
                 documents.extend(self._fetch_single_page(target))
             else:
                 documents.extend(self._crawl_same_origin(target))
-        return documents
+        return self._dedup_by_content(documents)
+
+    def _dedup_by_content(self, documents: list[Document]) -> list[Document]:
+        # A safety net beyond _normalize_url's tracking-param stripping:
+        # catches duplicate content reached via genuinely different URLs
+        # that URL normalization can't detect since it only ever looks at
+        # the URL, never the fetched content - e.g. two separately
+        # configured targets (different seed_url entries in
+        # config/crawl_targets.yaml) that happen to converge on the same
+        # canonical page. Whichever copy is encountered first (crawl
+        # order) wins; later duplicates are dropped and recorded in
+        # `skipped`, not silently discarded.
+        #
+        # Empty extracted text is deliberately exempt: two pages that both
+        # extract to "" (e.g. JS-rendered pages html_parser.parse_html
+        # can't read structure from - see ADR-0010's no-JS-rendering
+        # tradeoff) aren't actually duplicates of each other, just two
+        # separate failed extractions. Merging them would produce a
+        # `skipped` entry claiming "duplicate content", which is
+        # misleading when debugging why a page didn't get indexed.
+        first_seen_at_by_text: dict[str, str] = {}
+        deduped: list[Document] = []
+        for document in documents:
+            if not document.text:
+                deduped.append(document)
+                continue
+            first_seen_at = first_seen_at_by_text.get(document.text)
+            if first_seen_at is not None:
+                self.skipped.append((document.source, f"duplicate content of {first_seen_at}"))
+                continue
+            first_seen_at_by_text[document.text] = document.source
+            deduped.append(document)
+        return deduped
 
     def _fetch_single_page(self, target: _Target) -> list[Document]:
         url = _normalize_url(target.seed_url)
