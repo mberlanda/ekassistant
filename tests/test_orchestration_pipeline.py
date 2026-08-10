@@ -42,7 +42,7 @@ def _hit(chunk_id: str) -> SearchResult:
 
 def test_answer_question_grounds_the_answer_in_retrieved_context():
     response = (
-        '{"answer": "Yes.", "citations": [{"chunk_id": "c1", "source": "policy.md"}], '
+        '{"answer": "Yes.", "citations": [{"index": 1}], '
         '"abstained": false, "confidence": 0.85}'
     )
     result = answer_question(
@@ -62,7 +62,7 @@ def test_answer_question_grounds_the_answer_in_retrieved_context():
 
 def test_answer_question_reports_retrieval_hit_count_and_stage_timing():
     response = (
-        '{"answer": "Yes.", "citations": [{"chunk_id": "c1", "source": "policy.md"}], '
+        '{"answer": "Yes.", "citations": [{"index": 1}], '
         '"abstained": false, "confidence": 0.85}'
     )
     result = answer_question(
@@ -115,11 +115,12 @@ def test_answer_question_abstains_with_no_groups_even_if_index_would_return_hits
 
 
 def test_answer_question_downgrades_citation_outside_retrieved_context_to_abstain():
-    # Grounding integrity end to end: even if the model hallucinates a
-    # citation to a chunk_id that wasn't actually retrieved, the answer
-    # must be downgraded to abstain, not passed through.
+    # Grounding integrity end to end: even if the model cites a chunk
+    # position that wasn't actually retrieved (only one chunk comes back
+    # here, so index 99 is out of range), the answer must be downgraded to
+    # abstain, not passed through.
     response = (
-        '{"answer": "Yes.", "citations": [{"chunk_id": "not-retrieved", "source": "x.md"}], '
+        '{"answer": "Yes.", "citations": [{"index": 99}], '
         '"abstained": false, "confidence": 0.85}'
     )
     result = answer_question(
@@ -141,7 +142,7 @@ def test_answer_question_downgrades_citation_outside_retrieved_context_to_abstai
 
 def test_answer_question_reports_the_models_confidence_on_a_grounded_answer():
     response = (
-        '{"answer": "Yes.", "citations": [{"chunk_id": "c1", "source": "policy.md"}], '
+        '{"answer": "Yes.", "citations": [{"index": 1}], '
         '"abstained": false, "confidence": 0.85}'
     )
     result = answer_question(
@@ -159,7 +160,7 @@ def test_answer_question_reports_the_models_confidence_on_a_grounded_answer():
 
 def test_answer_question_passes_the_temperature_through_to_the_chat_client():
     response = (
-        '{"answer": "Yes.", "citations": [{"chunk_id": "c1", "source": "policy.md"}], '
+        '{"answer": "Yes.", "citations": [{"index": 1}], '
         '"abstained": false, "confidence": 0.85}'
     )
     chat_client = FakeChatClient(response)
@@ -181,7 +182,7 @@ def test_answer_question_uses_the_default_temperature_when_not_specified():
     from ekassistant.models.generation import DEFAULT_TEMPERATURE
 
     response = (
-        '{"answer": "Yes.", "citations": [{"chunk_id": "c1", "source": "policy.md"}], '
+        '{"answer": "Yes.", "citations": [{"index": 1}], '
         '"abstained": false, "confidence": 0.85}'
     )
     chat_client = FakeChatClient(response)

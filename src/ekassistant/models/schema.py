@@ -7,8 +7,52 @@ from pydantic import BaseModel, Field
 
 
 class Citation(BaseModel):
+    """A citation as surfaced to callers (API/TUI/traces), carrying the
+    real chunk_id. Always rebuilt from the authoritative context chunk in
+    generation.py - never deserialized directly from model output, which
+    uses ModelCitation's surrogate index instead.
+    """
+
     chunk_id: str
     source: str
+
+
+# WHY AN INDEX AND NOT A chunk_id (kept as a comment, NOT a docstring:
+# pydantic copies a model's docstring into its JSON schema `description`,
+# and that schema is handed straight to the LLM via chat_json's `format` -
+# so anything written below would become prompt text the model has to read.
+# Measured: a long rationale here made granite4.1:8b stop emitting
+# citations entirely.)
+#
+# The model used to be asked for `chunk_id` + `source` verbatim. That
+# contract was ambiguous whenever a chunk_id was itself composite - the web
+# crawler produces `<url>#<n>` (see ingest/chunker.py) - because a
+# reasonable model reads two fields, sees `url#n`, and splits it along the
+# obvious seam: chunk_id="7", source="https://...". Observed live with
+# granite4.1:8b, which produced correct, well-grounded answers that were
+# then thrown away by citation validation. llama3.2:1b only passed because
+# it echoed the opaque string verbatim rather than interpreting it - i.e.
+# the contract was latently broken and merely masked by one model's
+# literal-mindedness, not validated by it.
+#
+# A bare integer has no internal structure to split, is far cheaper to emit
+# than a ~70-character URL, and (being grammar-constrained to a number)
+# cannot carry a fabricated source label at all. `source` is deliberately
+# NOT requested: it is always rebuilt from the authoritative context chunk,
+# so asking for it would only re-introduce the ambiguity for a value that
+# gets discarded.
+class ModelCitation(BaseModel):
+    """One cited context chunk, referenced by its bracketed number."""
+
+    index: int = Field(
+        ge=1,
+        description=(
+            "The number shown in square brackets before a context chunk, "
+            "e.g. 3 for a chunk introduced by '[3]'. Use the bracketed "
+            "number exactly as shown. Never use a URL, filename, or any "
+            "identifier appearing inside the chunk's text or source label."
+        ),
+    )
 
 
 class ModelResponse(BaseModel):
@@ -20,7 +64,7 @@ class ModelResponse(BaseModel):
     """
 
     answer: str
-    citations: list[Citation]
+    citations: list[ModelCitation]
     abstained: bool
     confidence: float | None = Field(
         default=None,

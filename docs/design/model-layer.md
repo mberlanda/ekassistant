@@ -32,28 +32,69 @@ specific model.
 
 ## Cite-or-abstain contract
 
-The LLM is prompted to return a structured result:
+Context chunks are rendered to the model with a 1-based **position**, not
+their real `chunk_id`:
+
+```
+[1] (source: https://example.com/p/some-post)
+<chunk text>
+
+[2] (source: remote-access-vpn-policy.md)
+<chunk text>
+```
+
+and the LLM is prompted to return a structured result citing those
+positions:
 
 ```
 {
   "answer": "<text, or empty if abstaining>",
-  "citations": [{"chunk_id": "...", "source": "..."}],
+  "citations": [{"index": 1}, {"index": 2}],
   "abstained": true | false,
   "confidence": <0.0-1.0, optional>
 }
 ```
+
+Note this is the *model-facing* shape (`ModelCitation`). What the API and
+TUI receive is unchanged — `{"chunk_id": ..., "source": ...}` — because
+every citation is resolved from the position back to the authoritative
+retrieved chunk before it reaches a caller.
+
+**Why a position and not the chunk_id.** The model was originally asked
+for `chunk_id` + `source` verbatim. That contract is ambiguous as soon as
+a chunk_id is itself composite: the web crawler produces `<url>#<n>`, so
+a model that reads two fields, sees `url#n`, and splits it along the
+obvious seam (`chunk_id: "7"`, `source: "https://…"`) is being reasonable
+— and its otherwise-correct, well-grounded answer then fails citation
+validation and is thrown away. Observed live with `granite4.1:8b`.
+`llama3.2:1b` passed only because it echoed the opaque string verbatim
+instead of interpreting it, so the contract was never really validated by
+it — merely masked. A bare integer has no seam to split on, is far cheaper
+to emit than a ~70-character URL, and cannot carry a fabricated source
+label at all.
+
+Measured on crawled (composite-id) content, `llama3.2:1b`, same question,
+n=20 each: **2/20 grounded answers before, 11/20 after.**
 
 Validation applied after the model responds, before returning to the
 caller:
 
 - If `abstained` is `false`, every claim-bearing sentence in `answer` is
   expected to correspond to at least one entry in `citations`, and every
-  cited `chunk_id` must be a chunk that was actually in the assembled
-  context (never a model-invented ID).
-- If validation fails (citations missing, or a citation points outside the
-  provided context), the system treats the response as an abstain, not as
-  a best-effort answer — silently downgrading a broken citation to "no
+  cited index must be within range of the assembled context (never a
+  position the model invented). `index` is constrained to `>= 1` at the
+  schema level, so a 0 or negative value fails field validation rather
+  than silently resolving via Python's negative indexing.
+- If validation fails (citations missing, or an index outside the provided
+  context), the system treats the response as an abstain, not as a
+  best-effort answer — silently downgrading a broken citation to "no
   citation" would defeat the grounding guarantee.
+
+**Anything written into the Pydantic schema is prompt text.** Pydantic
+copies model docstrings and `Field(description=...)` into the JSON schema,
+and that schema is handed straight to the LLM as `format`. Engineering
+rationale therefore belongs in `#` comments, never in a docstring on a
+model-facing type — see the comment above `ModelCitation`.
 
 `confidence` is the model's own, unvalidated self-assessment of how well
 the context supports its answer — passed through to the caller as-is on
