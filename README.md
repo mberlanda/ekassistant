@@ -81,7 +81,9 @@ make venv
 make install
 
 # 2. Pull the small local models (~1.6 GB total; see ADR-0004 and ADR-0006
-#    for why these specific models were picked for a poor-connection start)
+#    for why these specific models were picked for a poor-connection start).
+#    To pull a different chat model instead, see "Trying a larger chat
+#    model" below: make models OLLAMA_MODEL=granite4.1:8b
 make models
 
 # 3. Bring up the vector store
@@ -118,6 +120,51 @@ generation quality, since the small local chat model is
 [documented as unreliable](docs/decisions/0004-local-llm-serving-via-ollama.md)
 at the cite-or-abstain contract by design, not by bug. Requires `make ingest`
 to have run first.
+
+## Trying a larger chat model
+
+`OLLAMA_MODEL` can be passed to any `make` target to override `.env` for a
+single run — useful for measuring a bigger model against the eval harness
+before committing to it:
+
+```bash
+# Pull first (one-off, several GB each), then measure.
+make models OLLAMA_MODEL=granite4.1:8b
+make eval   OLLAMA_MODEL=granite4.1:8b
+
+make models OLLAMA_MODEL=qwen3.5:9b
+make eval   OLLAMA_MODEL=qwen3.5:9b
+```
+
+Two reasonable candidates, both a large step up from the 1B default:
+
+| Model | Size | Why |
+|---|---|---|
+| `granite4.1:8b` | ~5 GB | IBM's RAG/tool-calling-tuned line — the bet is better *calibration* (knowing when context is insufficient), which is exactly what the cite-or-abstain contract turns on. No thinking mode, so it's a clean drop-in. |
+| `qwen3.5:9b` | 6.6 GB | Two model generations newer than `llama3.2:1b` and ~9x the parameters; the general-purpose "make the bottleneck go away" option. Carries a `thinking` mode whose interaction with constrained decoding (below) is worth verifying, not assuming. |
+
+Compare the Tier 2 `abstain rate` and `abstain_reason_counts` breakdown
+against the 1B baseline documented in
+[docs/roadmap.md](docs/roadmap.md) (PR #10: 3-6 successful answers out of 10
+on a known-answerable question). Tier 1 won't move — it's deterministic
+ACL/retrieval with no LLM in the loop. Note that `eval_harness`'s Tier 2
+defaults to `runs=5` over a single question, which is thin for separating a
+50% success rate from a 70% one; raise it for a real model bake-off.
+
+Worth knowing what a larger model does and doesn't buy you here.
+`OllamaClient.chat_json` passes `format=<json schema>`, so Ollama
+grammar-constrains the sampler and *any* model emits schema-valid JSON —
+malformed output was never the 1B model's failure mode. It fails
+semantically: filling a structurally-perfect schema with the wrong judgment
+(abstaining on context that plainly answers the question). That's the part
+that scales with parameters. Expect roughly 3-4x the generation latency in
+exchange; `make eval` reports `avg generation latency` so the real number is
+measurable rather than guessed.
+
+Only the chat model is overridable this way. `OLLAMA_EMBED_MODEL` is
+deliberately not, because changing it also requires changing
+`EMBEDDING_DIMENSIONS` and re-running `make ingest` to rebuild the vector
+index — see [ADR-0006](docs/decisions/0006-embedding-model-choice.md).
 
 ## Status
 
