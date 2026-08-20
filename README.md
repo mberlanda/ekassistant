@@ -16,6 +16,7 @@ that actually owns that topic — this file stays short on purpose.
 | The original V1 requirements, verbatim | [docs/context/brief.md](docs/context/brief.md) |
 | What V2 adds, and why it isn't "V1 plus some tools" | [docs/context/brief-v2.md](docs/context/brief-v2.md) |
 | How the whole system fits together (diagrams) | [docs/architecture.md](docs/architecture.md) |
+| **A concrete behaviour, traced through the code that does it** | [docs/use-cases.md](docs/use-cases.md) |
 | *Why* a specific decision was made | [docs/decisions/](docs/decisions/) (Architecture Decision Records) |
 | How a specific component is built, with tradeoffs | [docs/design/](docs/design/) (low-level designs) |
 | What an abbreviation means | [docs/glossary.md](docs/glossary.md) |
@@ -73,6 +74,7 @@ docs/
   design/                 low-level designs — the *how*, per component
   glossary.md             every abbreviation, defined once
   roadmap.md              what's built vs. designed-only, PR by PR
+  use-cases.md            18 real behaviours -> entry point, code path, tests, how to run
 seed_corpus/              tiny hand-authored fixture corpus (.md/.html/.pdf/.docx)
 src/ekassistant/          application code, one subpackage per component
   config/                 settings (env-driven)

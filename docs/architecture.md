@@ -6,6 +6,11 @@ two concrete pipelines (ingest, query) sketched in
 [low-level design](design/) and the [ADRs](decisions/) behind its shape.
 Every abbreviation is defined once, centrally, in the [glossary](glossary.md).
 
+This page is the *map*. If you would rather follow a concrete behaviour
+end to end — a question being answered, a capability call being denied, an
+approval being bound to a payload — [use-cases.md](use-cases.md) walks 18 of
+them through the actual code, with the tests that prove each one.
+
 ## The two pipelines
 
 ```mermaid
