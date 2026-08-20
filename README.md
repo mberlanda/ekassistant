@@ -1,8 +1,10 @@
 # Enterprise Knowledge Assistant
 
-Employees ask questions in natural language and get grounded, cited answers
-drawn from internal documents — wikis, share drives, customer support
-tickets, chats — while respecting Access Control List (ACL) boundaries.
+A personal playground for building an enterprise assistant properly: first
+grounded, cited question-answering over internal documents with Access
+Control List (ACL) boundaries respected (**V1**, complete), and now
+task automation on top of it — drafting client emails, researching the open
+web, and querying sensitive structured data (**V2**, in progress).
 
 This README is the entry point. Every section below links to the document
 that actually owns that topic — this file stays short on purpose.
@@ -11,8 +13,10 @@ that actually owns that topic — this file stays short on purpose.
 
 | If you want to know... | Go to |
 |---|---|
-| The original requirements, verbatim | [docs/context/brief.md](docs/context/brief.md) |
+| The original V1 requirements, verbatim | [docs/context/brief.md](docs/context/brief.md) |
+| What V2 adds, and why it isn't "V1 plus some tools" | [docs/context/brief-v2.md](docs/context/brief-v2.md) |
 | How the whole system fits together (diagrams) | [docs/architecture.md](docs/architecture.md) |
+| **A concrete behaviour, traced through the code that does it** | [docs/use-cases.md](docs/use-cases.md) |
 | *Why* a specific decision was made | [docs/decisions/](docs/decisions/) (Architecture Decision Records) |
 | How a specific component is built, with tradeoffs | [docs/design/](docs/design/) (low-level designs) |
 | What an abbreviation means | [docs/glossary.md](docs/glossary.md) |
@@ -20,15 +24,20 @@ that actually owns that topic — this file stays short on purpose.
 
 ## Scope
 
-**V1**: grounded question-answering over a few high-value internal sources,
-with strict per-user access control and citations, abstaining when an
-answer isn't found in retrieved context.
+**V1** (complete): grounded question-answering over a few high-value
+internal sources, with strict per-user access control and citations,
+abstaining when an answer isn't found in retrieved context.
 
-**Deferred**: write actions, cross-source reasoning (needs a knowledge
-graph), agentic multi-hop retrieval. See
-[docs/context/brief.md](docs/context/brief.md#deferred-explicitly-out-of-scope-for-v1).
+**V2** (in progress): email drafting with approval-gated send, open-web
+research in an isolated execution context, and read-only analytics over
+certified metrics. See
+[docs/context/brief-v2.md](docs/context/brief-v2.md).
 
-## The two decisions that shape everything else
+**Still deferred**: unrestricted natural-language-to-SQL, autonomous send,
+cross-source reasoning via a knowledge graph, and any single agent holding
+every capability. The V2 brief states what would change each of those.
+
+## The decisions that shape everything else
 
 1. **Access control is enforced at retrieval**, as a pre-filter inside the
    index — not a post-hoc filter, not a UI-only check. See
@@ -36,33 +45,54 @@ graph), agentic multi-hop retrieval. See
 2. **Retrieval is hybrid**: dense (embeddings) + keyword (Best Matching 25,
    BM25), fused with Reciprocal Rank Fusion (RRF). See
    [ADR-0003](docs/decisions/0003-hybrid-retrieval-with-rrf.md).
+3. **No execution context holds private data, untrusted web content and an
+   outbound channel at once.** Each alone is manageable; together, one
+   successful prompt injection reads anything and sends it anywhere. So
+   capabilities are partitioned into *zones*, and a task's declared purpose
+   fixes which zones it can reach. See
+   [ADR-0013](docs/decisions/0013-execution-zone-isolation.md).
+4. **Authority is carried, never generated.** Every task runs as a durable
+   *Run* whose scopes, zones and data ceiling are fixed at intake. A model
+   may choose among capabilities the Run already holds; it cannot add a
+   scope, a recipient, a destination or an effect class. See
+   [ADR-0011](docs/decisions/0011-durable-run-aggregate.md) and
+   [ADR-0012](docs/decisions/0012-capability-registry-and-gateway.md).
 
 ## Repository map
 
 ```
 config/
-  identities.yaml         mock user -> group mapping (see ADR-0007)
-  crawl_targets.yaml       web crawler seed URLs + ACL (empty by default, see ADR-0010)
+  identities.yaml         mock user -> group + tenant mapping (see ADR-0007)
+  policies.yaml           purposes -> zones/scopes/ceilings (see docs/design/policy.md)
+  capabilities.yaml       which capabilities this deployment exposes
+  crawl_targets.yaml      web crawler seed URLs + ACL (empty by default, see ADR-0010)
 docs/
-  context/brief.md      original requirements (historical record)
-  architecture.md        system-wide diagrams + spine-to-doc index
+  context/brief.md        original V1 requirements (historical record)
+  context/brief-v2.md     V2 requirements (historical record)
+  architecture.md         system-wide diagrams + spine-to-doc index
   decisions/              ADRs — the *why*
   design/                 low-level designs — the *how*, per component
-  glossary.md            every abbreviation, defined once
+  glossary.md             every abbreviation, defined once
   roadmap.md              what's built vs. designed-only, PR by PR
-seed_corpus/               tiny hand-authored fixture corpus (.md/.html/.pdf/.docx)
+  use-cases.md            18 real behaviours -> entry point, code path, tests, how to run
+seed_corpus/              tiny hand-authored fixture corpus (.md/.html/.pdf/.docx)
 src/ekassistant/          application code, one subpackage per component
   config/                 settings (env-driven)
   identity/               mock user -> group lookup
   ingest/                 connectors (filesystem, web crawler), parsing, chunking, embedding
   index/                  vector (Qdrant) + keyword (SQLite FTS5) adapters
-  retrieval/               ACL pre-filter, hybrid search, RRF, rerank
-  orchestration/          request pipeline (retrieve -> generate)
+  retrieval/              ACL pre-filter, hybrid search, RRF, rerank
+  orchestration/          V1 request pipeline (retrieve -> generate)
   models/                 LLM + embedding clients (Ollama-backed)
   api/                    API Gateway (FastAPI)
   tui/                    terminal client
-  observability/         tracing, metrics, eval harness
+  observability/          tracing, metrics, eval harness
   governance/             ACL-propagation delete checks
+  -- V2 --
+  runs/                   Run aggregate, state machine, intake, store
+  capabilities/           tool contracts, registry, gateway, effect ledger, audit, mocks
+  policy/                 purpose profiles, scope resolution, policy decisions
+  workflows/              task templates and the pre-flight sufficiency check
 tests/
 docker-compose.yml        Qdrant, run via OrbStack
 Makefile                  venv, install, lint, test, up, down, api, tui, models, ingest, eval
@@ -168,9 +198,20 @@ index — see [ADR-0006](docs/decisions/0006-embedding-model-choice.md).
 
 ## Status
 
-V1 is complete end-to-end: grounded question-answering, per-user ACL
+**V1 is complete end-to-end**: grounded question-answering, per-user ACL
 enforcement at retrieval, citations, abstain-when-not-found, a two-tier
 eval harness, ACL-propagation delete checks, and a domain-agnostic web
 crawler connector (opt-in via `config/crawl_targets.yaml`, empty by
-default). See [docs/roadmap.md](docs/roadmap.md) for the PR-by-PR
-breakdown, including what each PR's live verification actually proved.
+default).
+
+**V2 is at Phase 0**: every interface defined, every seam backed by a
+working mock — capability contracts, the registry and gateway, the effect
+ledger with payload-bound approval, the policy engine, and the Run
+aggregate with its state machine. Nothing is wired into a live endpoint
+yet, and all the stores are in-memory; what *is* real is the decision
+vocabulary, so filling a seam in with a durable implementation changes no
+caller. Phases 1–6 are laid out in the roadmap.
+
+See [docs/roadmap.md](docs/roadmap.md) for the PR-by-PR breakdown,
+including what each PR's live verification actually proved and the debts
+Phase 0 knowingly took on.

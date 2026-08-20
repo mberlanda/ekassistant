@@ -1,0 +1,36 @@
+# Which capabilities this deployment exposes.
+# See docs/design/capabilities.md#adding-a-capability.
+#
+# Names must exist in src/ekassistant/capabilities/bootstrap.py's CATALOGUE.
+# An unknown name fails at startup rather than being skipped — a typo here
+# would otherwise silently remove a tool, and "the assistant stopped being
+# able to do that" is far harder to trace back to a config file than a
+# service that refuses to boot.
+#
+# An empty or absent `enabled:` list yields an EMPTY registry, not the full
+# catalogue. Fail-closed: a truncated or half-written config should leave
+# the system able to do nothing, never able to do everything.
+#
+# Everything below is currently a mock (see capabilities/mocks/). Replacing
+# one with a real implementation means writing the class, adding it to
+# CATALOGUE under the same name, and changing nothing here — the contract
+# is what callers address, not the implementation.
+#
+# Enabling a capability does not grant it to anyone. A Run can only invoke
+# what its purpose's zone list and its groups' scopes already permit; see
+# config/policies.yaml.
+
+enabled:
+  # INTERNAL_DATA zone — permission-aware reads.
+  - crm_account_lookup
+  - certified_metric
+
+  # WEB_RESEARCH zone — untrusted output by construction.
+  - web_search
+
+  # EFFECT zone. Drafting is reversible and routine; sending is
+  # irreversible, needs a payload-bound approval, and is the one entry
+  # here worth removing outright in a deployment that has no business
+  # sending mail.
+  - save_email_draft
+  - send_email

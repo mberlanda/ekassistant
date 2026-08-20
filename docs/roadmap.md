@@ -4,11 +4,15 @@ Living status tracker for what's built vs. designed-but-not-built. Updated
 as each feature group merges. For *why* something is shaped the way it is,
 follow the doc links, not this page — this page only tracks *what exists*.
 
-Workflow for any new component (nothing is currently pending, see below):
-a feature branch, a PR against `main`, two independent review passes
-(findings fixed between passes), then merge — no direct-to-main commits
-for code once a component starts moving past its skeleton stub. Docs-only
-updates (like this file) may still land directly.
+Workflow for any new component: a feature branch, a PR against `main`, two
+independent review passes (findings fixed between passes), then merge — no
+direct-to-main commits for code once a component starts moving past its
+skeleton stub. Docs-only updates (like this file) may still land directly.
+
+**Current state**: V1 is complete end to end. V2 (see
+[the V2 brief](context/brief-v2.md)) is in progress — Phase 0 has landed
+the contracts and mocks; Phases 1–6 are planned, see the bottom of this
+page.
 
 ## Done
 
@@ -55,3 +59,47 @@ indexes populated by ingest, which needed the model layer for embedding;
 orchestration needed retrieval; eval needed orchestration to have
 something to evaluate) - that dependency order is why they're listed in
 this sequence, not build priority.
+
+## V2: acting, not just answering
+
+Scope and reasoning: [docs/context/brief-v2.md](context/brief-v2.md). The
+delivery shape is interfaces and mocks first, working implementations
+second — every seam gets its contract and a fixture implementation before
+any phase fills it in, so later phases add behaviour rather than
+restructuring boundaries.
+
+### Done
+
+| Component | Docs | Status |
+|---|---|---|
+| **Phase 0** — capability contracts, registry, gateway, effect ledger, policy engine, Run aggregate + state machine + intake, workflow seams, five mock capabilities | [brief-v2](context/brief-v2.md), [runs.md](design/runs.md), [capabilities.md](design/capabilities.md), [policy.md](design/policy.md), [ADR-0011](decisions/0011-durable-run-aggregate.md), [ADR-0012](decisions/0012-capability-registry-and-gateway.md), [ADR-0013](decisions/0013-execution-zone-isolation.md), [ADR-0014](decisions/0014-deterministic-workflow-templates.md) | Done, tested (133 new tests, 315 total, ruff clean). No behaviour change to `/query` or any V1 path — this phase adds seams and mocks, nothing wired into a live endpoint yet. Everything is in-memory: `InMemoryRunStore`, `InMemoryEffectLedger`, `InMemoryAuditSink`, and five fixture capabilities. What is *not* mocked is the decision vocabulary — effect classes, zones, classification ceilings, scopes and purposes are the real inputs, so replacing a backing store changes no caller. The test suite is deliberately deny-path heavy: the allow cases are the short section. Two design points worth flagging because they were not obvious up front: (1) the gateway hashes the **validated** payload, not the raw input — pydantic coerces, so binding an approval to the raw form would approve something other than what executes, which is why `canonical_payload()` is public and `propose_effect()` exists rather than callers reaching for the ledger directly; (2) `invoke()` **returns** a denial rather than raising, because the Run is charged for the attempt either way and an exception path made it far too easy to drop the charged copy — denied attempts consuming budget is what stops a model looping on a forbidden tool for free. The mock capabilities enforce their real counterparts' invariants (unknown account raises rather than returning an empty record, since an empty account reads downstream as a *permission* result; an uncertified metric period refuses rather than interpolating; send is idempotent and kill-switchable), because a permissive stub would let later phases be written against semantics the real thing does not have. `config/policies.yaml` ships with the zone separation that is the whole point, and `test_policy_engine.py` asserts it against the **shipped** file rather than a synthetic fixture — a synthetic-policy test would pass cheerfully while the deployed config had a hole in it |
+
+### Planned
+
+Ordered by dependency, not preference. Each is one branch and one PR under
+the workflow at the top of this page.
+
+| Phase | Scope | Depends on |
+|---|---|---|
+| 1 — Run service | Durable SQLite `RunStore`, budget enforcement wired to transitions, `POST /runs` + `GET /runs/{id}`; V1's `/query` re-expressed as the `knowledge_qa` task template so RAG becomes one task type rather than a special case | Phase 0 |
+| 2 — Gateway live | Mock capabilities invokable through a real endpoint; the deliverable is the negative authorization tests end to end, not the happy path | Phase 1 |
+| 3 — Workflow A, client email | Effect ledger persisted; payload-hash-bound approval; idempotent outbox; kill switch; recipient validated against the CRM's authorized-contact list. Send provider stays a local file outbox — irreversible-*shaped*, not actually delivering | Phase 2 |
+| 4 — Workflow B, market research | Zone isolation proven end to end: this workflow's gateway view contains zero internal-retrieval and zero effect capabilities. Reuses the existing crawler for fetch. Structured claim extraction → evidence bundle. Ships an injection red-team corpus, seeded by the hostile fixture already in `capabilities/mocks/web.py` | Phase 2 |
+| 5 — Workflow C, analytics | Certified-metric semantic layer over a fixture warehouse; typed read-only metric tools with row/column authorization. No generated SQL — that stays excluded, with the graduation criteria in the V2 brief | Phase 2 |
+| 6 — Protocol server | Expose the capability registry to external clients as a transport over the existing gateway, never as a replacement for it. Read-only capabilities by default; effectful ones require an approval token. Deliberately last: the registry will still be churning while the three workflows are built, and exposing an unstable surface over a protocol means versioning it prematurely | Phases 3–5 |
+
+### Debts Phase 0 knowingly took on
+
+Recorded here rather than discovered later:
+
+- `InMemoryRunStore` is not durable — Phase 1. It does already implement
+  the optimistic-concurrency check, so callers are not written against a
+  more permissive contract than they will get.
+- `InMemoryEffectLedger` is not durable — Phase 3, same reasoning.
+- No delegation chain: no on-behalf-of token, no consent record, no expiry.
+  The `delegation_ref` seam is named in [runs.md](design/runs.md) and not
+  yet populated.
+- No timer service, so `deadline_ts` is checked on access rather than
+  firing. A Run that stalls between calls will not time itself out.
+- Nothing is wired into the API Gateway yet. Phase 0 is reachable only from
+  tests and a Python session.
