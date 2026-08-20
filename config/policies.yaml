@@ -1,0 +1,91 @@
+# Policy Decision Point configuration.
+# See docs/design/policy.md and docs/decisions/0012-capability-registry-and-gateway.md.
+#
+# This is a mock policy service, the same way config/identities.yaml is a
+# mock directory (ADR-0007) — a static file standing in for something that
+# would really be a governed, versioned policy system. Never treat it as a
+# security boundary in itself. What is NOT mocked is the vocabulary: the
+# purposes, zones, effect classes and classification ceilings below are the
+# real decision inputs, so replacing this file with a real backend changes
+# no caller.
+#
+# Bump policy_version on every substantive edit. It is recorded on each
+# Run and on every audit record, and it is what lets an incident review ask
+# "would this still be permitted today?" separately from "was it permitted
+# then?".
+policy_version: "1"
+
+# Group -> scopes. Groups come from the identity directory
+# (config/identities.yaml); the mapping from group to capability scope
+# lives here, because directory membership and what that membership is
+# allowed to *do* are owned by different people and change on different
+# clocks.
+scopes_by_group:
+  all-staff:
+    - kb.documents.read
+    - web.search
+
+  engineering:
+    - kb.documents.read
+
+  support:
+    - crm.accounts.read
+    - email.drafts.write
+
+  finance:
+    - crm.accounts.read
+    - analytics.metrics.read
+    - email.drafts.write
+
+  # Deliberately its own group rather than a scope bundled into `support`.
+  # Sending externally is the one irreversible act in this system, so who
+  # holds it should be visible as a membership question, not buried in a
+  # scope list.
+  client-comms:
+    - email.send
+
+# Purpose -> what a Run declaring that purpose may ever do.
+#
+# The zone lists are the load-bearing part, and the thing to read them for
+# is what is ABSENT:
+#
+#   * market_research has no INTERNAL_DATA and no EFFECT. A Run doing web
+#     research cannot see the CRM or the metric layer, and cannot send
+#     anything — so hostile instructions embedded in a fetched page have
+#     nothing to reach.
+#   * client_communication has no WEB_RESEARCH. The context that drafts a
+#     client email never holds untrusted web text in the first place.
+#   * internal_analytics has neither WEB_RESEARCH nor EFFECT, and is the
+#     only purpose whose ceiling reaches RESTRICTED.
+#
+# No purpose combines private data, untrusted web content and an outbound
+# channel. That separation is the design (ADR-0013); this file is where it
+# is actually enforced.
+purposes:
+  knowledge_qa:
+    allowed_task_types: [knowledge_qa]
+    allowed_zones: [PURE, INTERNAL_DATA]
+    allowed_effect_classes: [PURE, READ_ONLY]
+    max_classification: CONFIDENTIAL
+
+  client_communication:
+    allowed_task_types: [email_draft]
+    allowed_zones: [PURE, INTERNAL_DATA, EFFECT]
+    allowed_effect_classes:
+      - PURE
+      - READ_ONLY
+      - REVERSIBLE_WRITE
+      - IRREVERSIBLE_EXTERNAL
+    max_classification: CONFIDENTIAL
+
+  market_research:
+    allowed_task_types: [market_research]
+    allowed_zones: [PURE, WEB_RESEARCH]
+    allowed_effect_classes: [PURE, READ_ONLY]
+    max_classification: PUBLIC
+
+  internal_analytics:
+    allowed_task_types: [analytics_query]
+    allowed_zones: [PURE, INTERNAL_DATA]
+    allowed_effect_classes: [PURE, READ_ONLY]
+    max_classification: RESTRICTED

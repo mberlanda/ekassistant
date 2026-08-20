@@ -5,15 +5,37 @@
 # `guest` intentionally has no groups, so the ACL boundary is visible out
 # of the box: the same question asked as `alice` vs. `guest` should differ
 # whenever the answer depends on a group-restricted document.
+#
+# Groups drive two separate things, and the split matters:
+#   * retrieval ACLs, matched directly against per-chunk allowed_groups
+#     (ADR-0002);
+#   * capability scopes, via config/policies.yaml's scopes_by_group.
+# A group is not a role — what it lets you *read* and what it lets you
+# *do* are resolved by different subsystems on purpose.
+#
+# `tenant` is carried on every Run and every audit record. Single-tenant
+# here, but present from the start: retrofitting tenancy into an
+# authorization path after it has callers is a much larger change than
+# threading a field nobody varies yet.
 
 alice:
+  tenant: acme
   groups: [engineering, all-staff]
 
 bob:
-  groups: [support, all-staff]
+  tenant: acme
+  # The only mock user in `client-comms`, so the one who can actually send
+  # externally. Keeps the send path from being trivially reachable in every
+  # test and gives the negative cases someone real to fail as.
+  groups: [support, all-staff, client-comms]
 
 carol:
+  tenant: acme
+  # Can draft a client email and read certified metrics, but cannot send —
+  # the most useful mock identity for testing that drafting and sending are
+  # genuinely separate authorities.
   groups: [finance, all-staff]
 
 guest:
+  tenant: acme
   groups: []

@@ -55,6 +55,21 @@ class Settings(BaseSettings):
     # for V1 - no tracing backend.
     trace_log_path: Path = Path("./data/traces.jsonl")
 
+    # Agent capabilities and policy (see docs/design/capabilities.md and
+    # docs/design/policy.md). Both files are mocks in the same sense
+    # identities.yaml is (ADR-0007) - real vocabulary, static backing
+    # store. capabilities.yaml ships with every mock enabled; narrowing it
+    # is the supported way to run a deployment that, say, can research the
+    # web but has no ability to send anything.
+    policies_path: Path = Path("./config/policies.yaml")
+    capabilities_path: Path = Path("./config/capabilities.yaml")
+
+    # Kept separate from trace_log_path on purpose: an audit record answers
+    # "what was this authorized to do", a trace answers "how did it
+    # behave", and they have different readers and different retention.
+    # See docs/design/capabilities.md#audit.
+    audit_log_path: Path = Path("./data/capability_audit.jsonl")
+
 
 @lru_cache
 def get_settings() -> Settings:
