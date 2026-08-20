@@ -10,9 +10,9 @@ direct-to-main commits for code once a component starts moving past its
 skeleton stub. Docs-only updates (like this file) may still land directly.
 
 **Current state**: V1 is complete end to end. V2 (see
-[the V2 brief](context/brief-v2.md)) is in progress — Phase 0 has landed
-the contracts and mocks; Phases 1–6 are planned, see the bottom of this
-page.
+[the V2 brief](context/brief-v2.md)) is in progress — Phases 0 and 1 have
+landed (contracts/mocks, then the durable Run service and `knowledge_qa`);
+Phases 2–6 are planned, see the bottom of this page.
 
 ## Done
 
@@ -73,6 +73,7 @@ restructuring boundaries.
 | Component | Docs | Status |
 |---|---|---|
 | **Phase 0** — capability contracts, registry, gateway, effect ledger, policy engine, Run aggregate + state machine + intake, workflow seams, five mock capabilities | [brief-v2](context/brief-v2.md), [runs.md](design/runs.md), [capabilities.md](design/capabilities.md), [policy.md](design/policy.md), [ADR-0011](decisions/0011-durable-run-aggregate.md), [ADR-0012](decisions/0012-capability-registry-and-gateway.md), [ADR-0013](decisions/0013-execution-zone-isolation.md), [ADR-0014](decisions/0014-deterministic-workflow-templates.md) | Done, tested (133 new tests, 315 total, ruff clean). No behaviour change to `/query` or any V1 path — this phase adds seams and mocks, nothing wired into a live endpoint yet. Everything is in-memory: `InMemoryRunStore`, `InMemoryEffectLedger`, `InMemoryAuditSink`, and five fixture capabilities. What is *not* mocked is the decision vocabulary — effect classes, zones, classification ceilings, scopes and purposes are the real inputs, so replacing a backing store changes no caller. The test suite is deliberately deny-path heavy: the allow cases are the short section. Two design points worth flagging because they were not obvious up front: (1) the gateway hashes the **validated** payload, not the raw input — pydantic coerces, so binding an approval to the raw form would approve something other than what executes, which is why `canonical_payload()` is public and `propose_effect()` exists rather than callers reaching for the ledger directly; (2) `invoke()` **returns** a denial rather than raising, because the Run is charged for the attempt either way and an exception path made it far too easy to drop the charged copy — denied attempts consuming budget is what stops a model looping on a forbidden tool for free. The mock capabilities enforce their real counterparts' invariants (unknown account raises rather than returning an empty record, since an empty account reads downstream as a *permission* result; an uncertified metric period refuses rather than interpolating; send is idempotent and kill-switchable), because a permissive stub would let later phases be written against semantics the real thing does not have. `config/policies.yaml` ships with the zone separation that is the whole point, and `test_policy_engine.py` asserts it against the **shipped** file rather than a synthetic fixture — a synthetic-policy test would pass cheerfully while the deployed config had a hole in it |
+| **Phase 1** — durable SQLite `RunStore`, budget enforcement wired to transitions, `POST /runs` + `GET /runs/{id}`, `knowledge_qa` task template | [runs.md](design/runs.md), [ADR-0011](decisions/0011-durable-run-aggregate.md), [ADR-0014](decisions/0014-deterministic-workflow-templates.md) (PR #TBD) | Done, tested (46 new tests, 361 total, ruff clean). `/query` is byte-for-byte untouched — `test_api_query.py` and `test_orchestration_pipeline.py` pass unmodified; `knowledge_qa`'s one step calls the same `answer_question()` V1 already calls. `SqliteRunStore` (`runs/sqlite_store.py`) implements the same `RunStore` Protocol and rejects everything `InMemoryRunStore` rejects, proven under genuinely concurrent OS threads (not a sequential loop) for both `create()` and `save()`. It sidesteps PR #6's sqlite3 cross-thread landmine differently than `SqliteKeywordIndex` did: rather than constructing inside the route handler body, it never holds a connection across calls at all, so it's safe to cache as a singleton — proven with 20 genuinely concurrent `POST /runs` requests against the real ASGI app, all succeeding. **A real design gap was found, not a bug exactly, but worth recording precisely because it would be easy to overclaim**: the optimistic-concurrency check inherited from `InMemoryRunStore` compares wall-clock timestamps, not a version token tied to what a caller actually read, so two callers racing from the same stale snapshot can both legitimately pass it — `charge()` always stamps "now", and time only moves forward. `test_run_store_sqlite.py` documents this deliberately (asserting "no cross-thread error, no torn write", not "every concurrent charge survives", which the store's actual contract does not promise) rather than shipping a test that would either be flaky or quietly assert something false. Budget enforcement is wired via `runs/service.py`'s `charge_or_exhaust()`, called before every workflow step by the new `execute_workflow()` driver — the one non-obvious piece is that `would_exhaust()`'s "deadline" dimension maps to `TIMED_OUT` while every other dimension maps to `BUDGET_EXHAUSTED`, so a corpus of stopped Runs keeps "stalled" distinguishable from "did a lot of work". `POST /runs` returns **201 with the Run's own terminal status**, not an HTTP error, for any workflow-level refusal (insufficient scope, budget exhaustion) — an HTTP error is reserved for requests where no valid Run could be created or dispatched at all (unknown purpose, unregistered task_type, missing input); `GET /runs/{id}` returns **404, never 403**, for another principal's Run, so existence itself isn't leaked. `knowledge_qa` gives the previously-unused `kb.documents.read` scope (present in `config/policies.yaml` since Phase 0, checked by nothing) a real capability-scope deny path: `guest` is refused by `check_sufficiency()` before a single retrieval call runs, additional to V1's existing per-chunk ACL enforcement. Deliberately out of scope, flagged rather than silently skipped: the step does not route retrieval/generation through the capability gateway (that needs a new capability surface, which is Phase 2's job, not this one); `execute_workflow`'s `request_status` handling only supports transitions legal directly from `RUNNING` (`FAILED_RETRYABLE`, aborts), not `AWAITING_APPROVAL` (legal only from `VALIDATING`) — Phase 3's email-approval workflow will need this driver extended to run steps in two phases, not just one more status value accepted. Also closed two dead Phase 0 seams found by audit: `Run.with_checkpoint` had no caller anywhere and was deleted (the `checkpoint` field itself stays); `JsonlAuditSink` had no caller either, but `POST /runs`' capability-gateway wiring gives it a real one, so it was kept and used rather than deleted |
 
 ### Planned
 
@@ -81,7 +82,6 @@ the workflow at the top of this page.
 
 | Phase | Scope | Depends on |
 |---|---|---|
-| 1 — Run service | Durable SQLite `RunStore`, budget enforcement wired to transitions, `POST /runs` + `GET /runs/{id}`; V1's `/query` re-expressed as the `knowledge_qa` task template so RAG becomes one task type rather than a special case | Phase 0 |
 | 2 — Gateway live | Mock capabilities invokable through a real endpoint; the deliverable is the negative authorization tests end to end, not the happy path | Phase 1 |
 | 3 — Workflow A, client email | Effect ledger persisted; payload-hash-bound approval; idempotent outbox; kill switch; recipient validated against the CRM's authorized-contact list. Send provider stays a local file outbox — irreversible-*shaped*, not actually delivering | Phase 2 |
 | 4 — Workflow B, market research | Zone isolation proven end to end: this workflow's gateway view contains zero internal-retrieval and zero effect capabilities. Reuses the existing crawler for fetch. Structured claim extraction → evidence bundle. Ships an injection red-team corpus, seeded by the hostile fixture already in `capabilities/mocks/web.py` | Phase 2 |
@@ -90,16 +90,34 @@ the workflow at the top of this page.
 
 ### Debts Phase 0 knowingly took on
 
-Recorded here rather than discovered later:
+Recorded here rather than discovered later. Struck through where Phase 1
+closed them; see the Phase 1 Done row above for how each was verified.
 
-- `InMemoryRunStore` is not durable — Phase 1. It does already implement
-  the optimistic-concurrency check, so callers are not written against a
-  more permissive contract than they will get.
+- ~~`InMemoryRunStore` is not durable — Phase 1.~~ Closed: `SqliteRunStore`
+  (`runs/sqlite_store.py`) implements the same Protocol and the same
+  optimistic-concurrency contract, proven under genuine thread
+  concurrency. The contract itself has a real, documented limitation
+  (wall-clock-based, not a true version token) inherited from
+  `InMemoryRunStore` — see the Phase 1 row and `docs/design/runs.md`'s
+  Persistence section — which Phase 1 made precise rather than fixed;
+  fixing it (a real version counter or row-level lock) is fair game for
+  whichever future phase needs a stronger guarantee than "no lost update
+  when a caller actually re-reads before writing".
 - `InMemoryEffectLedger` is not durable — Phase 3, same reasoning.
 - No delegation chain: no on-behalf-of token, no consent record, no expiry.
   The `delegation_ref` seam is named in [runs.md](design/runs.md) and not
   yet populated.
 - No timer service, so `deadline_ts` is checked on access rather than
   firing. A Run that stalls between calls will not time itself out.
-- Nothing is wired into the API Gateway yet. Phase 0 is reachable only from
-  tests and a Python session.
+- ~~Nothing is wired into the API Gateway yet.~~ Partially closed:
+  `POST /runs` and `GET /runs/{id}` are live and drive `knowledge_qa` end
+  to end. The capability gateway itself (the five mock capabilities from
+  Phase 0) is still reachable only from tests and a Python session — that
+  is Phase 2's explicit deliverable, not something Phase 1 was scoped to
+  do.
+- New from Phase 1, not inherited: `POST /runs`' budget override is
+  caller-supplied and not policy-bounded (see the Phase 1 row); and
+  `runs/service.py::execute_workflow` only supports a step requesting a
+  status transition that is legal directly from `RUNNING` — Phase 3's
+  approval-bearing email workflow will need it extended to run steps in
+  two phases before a step can request `AWAITING_APPROVAL`.

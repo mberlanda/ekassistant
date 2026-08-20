@@ -70,6 +70,13 @@ class Settings(BaseSettings):
     # See docs/design/capabilities.md#audit.
     audit_log_path: Path = Path("./data/capability_audit.jsonl")
 
+    # Durable Run store (see docs/design/runs.md#persistence, Phase 1).
+    # SqliteRunStore opens a fresh connection per call rather than holding
+    # one for the object's lifetime (contrast SqliteKeywordIndex), so this
+    # path is safe to share across a request pool the way keyword_index_path
+    # is not - see runs/sqlite_store.py's module docstring.
+    runs_db_path: Path = Path("./data/runs.sqlite3")
+
 
 @lru_cache
 def get_settings() -> Settings:
