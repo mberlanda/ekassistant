@@ -14,11 +14,14 @@ not built* stays in [the roadmap](roadmap.md), never here.
 confusing thing about the repo right now:
 
 - **V1 use cases are live over HTTP** — `POST /query` against a running API.
-- **V2 Phase 0 use cases are reachable from tests and a Python session
-  only.** Phase 0 shipped contracts, a gateway, a policy engine and mocks;
-  nothing is wired into an endpoint yet. That is deliberate ([the V2
-  brief](context/brief-v2.md): interfaces and mocks first), and Phase 1 is
-  what changes it.
+- **V2 Phase 1 use cases are live over HTTP** — `POST /runs` and
+  `GET /runs/{id}` against the same running API.
+- **V2 Phase 0 use cases are still reachable from tests and a Python
+  session only.** Phase 0 shipped contracts, a gateway, a policy engine and
+  mocks; Phase 1 wired the *Run* half of that into endpoints, but no
+  endpoint invokes a capability through the gateway yet. That split is
+  deliberate ([the V2 brief](context/brief-v2.md): interfaces and mocks
+  first), and Phase 2 is what closes it.
 
 ---
 
@@ -44,6 +47,11 @@ confusing thing about the repo right now:
 | [UC-16](#uc-16-a-looping-model-runs-out-of-budget) | A looping model runs out of budget | Python | V2 runs |
 | [UC-17](#uc-17-web-content-arrives-labelled-untrusted) | Web content arrives labelled untrusted | Python | V2 zones |
 | [UC-18](#uc-18-reconstruct-what-a-run-did-after-the-fact) | Reconstruct what a Run did, after the fact | Python | V2 audit |
+| [UC-19](#uc-19-start-a-run-over-http-and-get-a-cited-answer) | Start a Run over HTTP, get a cited answer | HTTP | V2 runs |
+| [UC-20](#uc-20-a-scope-you-do-not-hold-stops-the-work-before-it-starts) | A scope you don't hold stops work before it starts | HTTP | V2 policy |
+| [UC-21](#uc-21-someone-elses-run-is-404-never-403) | Someone else's Run is 404, never 403 | HTTP | V2 runs |
+| [UC-22](#uc-22-a-run-outlives-the-process-that-created-it) | A Run outlives the process that created it | HTTP | V2 durability |
+| [UC-23](#uc-23-a-budget-stops-a-run-between-steps-with-a-named-reason) | A budget stops a Run between steps, with a named reason | HTTP | V2 runs |
 
 **Two minutes of setup** covers UC-1 through UC-6:
 
@@ -277,8 +285,11 @@ that forces Qdrant scroll pagination across pages.
 
 # V2 Phase 0 — the machinery for doing work
 
-Everything below is reachable **only from a Python session or the test
-suite**. Start every V2 snippet with this preamble:
+Everything in *this* section is reachable **only from a Python session or
+the test suite** — these are the authorization primitives, and Phase 2 is
+what puts them behind an endpoint. (The Run lifecycle they feed *is* live
+over HTTP; see [V2 Phase 1](#v2-phase-1--runs-over-http) below.) Start
+every snippet in this section with this preamble:
 
 ```python
 from pathlib import Path
@@ -655,14 +666,191 @@ capability still keeps the charge **and** the audit record).
 
 ---
 
+---
+
+# V2 Phase 1 — Runs over HTTP
+
+Phase 1 is where a Run stops being a Python object and becomes a durable,
+addressable thing. `POST /runs` starts one, `GET /runs/{id}` reads its
+status back, and V1's RAG pipeline is re-expressed as one *task type*
+(`knowledge_qa`) rather than a special-cased endpoint — so retrieval
+becomes one kind of work a Run can do, not the only kind the system knows.
+
+`POST /query` is byte-for-byte unchanged and still works. The two coexist
+on purpose: V1 stays a fair baseline to measure the V2 path against, and
+`knowledge_qa`'s one step calls the same `answer_question()` V1 calls
+(`workflows/knowledge_qa.py:89`), so a difference between them is a
+difference in *authorization*, never in retrieval quality.
+
+No extra setup — the same `make api` server serves these.
+
+## UC-19: Start a Run over HTTP and get a cited answer
+
+**What happens.** Intake fixes the Run's authority from purpose + groups
+(UC-7), the workflow runs, and the answer comes back **once**. The Run
+record persists; the answer text does not.
+
+```bash
+curl -s localhost:8000/runs -H 'X-User-Id: alice' -H 'Content-Type: application/json' \
+  -d '{"purpose":"knowledge_qa","task_type":"knowledge_qa",
+       "input":{"question":"What is the deployment process?"}}' | jq
+```
+
+The response has two halves: `run` (durable) and `result` (a one-time
+echo). `CreateRunResponse` (`api/main.py:368`) says why — `RunResponse`
+carries status, budget, spend and `evidence_refs`, but **never the answer
+text**, so a later `GET /runs/{id}` returns the record without the content.
+That is the same trust boundary V1's `/query` already draws; Phase 1 does
+not widen it just because there is now somewhere to persist things.
+
+The path: `create_run_route` (`api/main.py:392`) validates input *before*
+`run_store.create()` — so a 400 or 422 leaves no orphaned `RECEIVED` Run —
+then `execute_workflow` (`runs/service.py:76`) drives
+`RECEIVED → PLANNED → RUNNING → VALIDATING → COMPLETED`, saving after every
+transition so a concurrent `GET` sees live progress rather than a stale
+`RECEIVED` Run that silently finished elsewhere.
+
+**Proof.** `tests/test_api_runs.py:289` (*completes and is returned once*) ·
+`:317` (*20 genuinely concurrent requests, real threads*) ·
+`tests/test_workflow_knowledge_qa.py:109`, `:124` (*an abstain still
+completes the Run*), `:140` (*infrastructure failure propagates rather than
+faking an abstain*).
+
+---
+
+## UC-20: A scope you do not hold stops the work before it starts
+
+**What happens.** `guest` holds no `kb.documents.read`, so the Run is
+rejected **before a single retrieval call runs** — not after retrieving and
+filtering everything away.
+
+```bash
+curl -s localhost:8000/runs -H 'X-User-Id: guest' -H 'Content-Type: application/json' \
+  -d '{"purpose":"knowledge_qa","task_type":"knowledge_qa","input":{"question":"anything"}}' | jq '.run.status, .run.terminal_reason'
+# "REJECTED_POLICY"  "missing scopes ['kb.documents.read']"
+```
+
+Two things worth noticing. First, this is **201, not 403** — the refusal
+*is* the outcome, and a refused Run is a real, auditable record rather than
+an HTTP error with nothing behind it. An HTTP error is reserved for
+requests where no valid Run could be created at all (unknown purpose → 403,
+unregistered task type → 400, missing input → 422). Second, the check is
+`check_sufficiency` (`workflows/base.py:115`), called by `execute_workflow`
+*before* anything is charged or attempted (`runs/service.py:120`): a Run
+that would be denied on its third step should never have run the first two.
+
+This also gives `kb.documents.read` its first real teeth. The scope has
+been in `config/policies.yaml` since Phase 0 and was checked by nothing —
+it is now enforced ahead of V1's per-chunk ACL filter, which still runs
+underneath (UC-2). Two independent layers, not one moved.
+
+**Proof.** `tests/test_api_runs.py:184` · `tests/test_workflow_knowledge_qa.py:161` ·
+`tests/test_run_service.py:172` (*rejects before running anything*).
+
+---
+
+## UC-21: Someone else's Run is 404, never 403
+
+**What happens.** Fetching a Run belonging to another principal or another
+tenant returns exactly what a `run_id` that never existed returns.
+
+```bash
+curl -s -o /dev/null -w '%{http_code}\n' localhost:8000/runs/<alices-run-id> -H 'X-User-Id: bob'
+# 404
+```
+
+A 403 would confirm the `run_id` exists and is merely not yours — which is
+itself information a caller with no legitimate access should not get. This
+is the same reasoning as UC-2's "no leakage" denial, applied to Run
+identifiers instead of document content. `get_run_route`
+(`api/main.py:514`) checks `tenant_id` *and* `principal_id`, and the store's
+`list_for_principal` (`runs/sqlite_store.py:238`) makes tenant part of the
+key rather than a post-filter, so a caller that forgets to pass it gets
+nothing rather than everything.
+
+**Proof.** `tests/test_api_runs.py:260` (*another principal's Run is 404, not
+403*) · `:253` · `tests/test_run_store_sqlite.py:112`, `:121` (*wrong tenant
+returns nothing rather than everything*).
+
+---
+
+## UC-22: A Run outlives the process that created it
+
+**What happens.** Restart the API and the Run is still there — Phase 0's
+`InMemoryRunStore` is no longer what serves requests.
+
+```bash
+RUN_ID=$(curl -s localhost:8000/runs -H 'X-User-Id: alice' -H 'Content-Type: application/json' \
+  -d '{"purpose":"knowledge_qa","task_type":"knowledge_qa","input":{"question":"anything"}}' | jq -r .run.run_id)
+# restart the server, then:
+curl -s localhost:8000/runs/$RUN_ID -H 'X-User-Id: alice' | jq '.status, .spend'
+```
+
+`SqliteRunStore` (`runs/sqlite_store.py:168`) implements the same
+`RunStore` Protocol as the in-memory one and rejects everything it rejects,
+so no caller was written against a more permissive contract than it gets.
+It handles sqlite's thread affinity differently from `SqliteKeywordIndex`
+(whose cross-thread bug is the reason this is called out at all — see
+UC-1's note): it **never holds a connection across calls**, opening and
+closing one per method via `_session` (`:176`), which is what makes it safe
+to cache as an `lru_cache` singleton.
+
+**Proof.** `tests/test_run_store_sqlite.py:135` (*a second store instance over
+the same path sees the same data*) · `:38` (*round trip preserves every field
+group*) · `:145`, `:176` (*real OS threads, not a sequential loop*).
+
+> **Known limitation:** the optimistic-concurrency check compares
+> wall-clock `updated_at`, not a version token tied to what a caller
+> actually read, so two callers racing from the same stale snapshot can
+> both pass it. `tests/test_run_store_sqlite.py:88` asserts what the store
+> genuinely promises ("no torn write") rather than a guarantee it does not
+> give. Documented in [runs.md](design/runs.md) and [the roadmap](roadmap.md).
+
+---
+
+## UC-23: A budget stops a Run between steps, with a named reason
+
+**What happens.** UC-16 showed budget being *checked*. Phase 1 is where the
+check is wired to the state machine, so exhaustion actually stops a Run and
+records **which** budget ran out.
+
+```bash
+curl -s localhost:8000/runs -H 'X-User-Id: alice' -H 'Content-Type: application/json' \
+  -d '{"purpose":"knowledge_qa","task_type":"knowledge_qa","input":{"question":"anything"},
+       "budget":{"max_steps":0}}' | jq '.run.status, .run.terminal_reason, .result'
+# "BUDGET_EXHAUSTED"  "max_steps exhausted before charging steps=1 ..."  null
+```
+
+`charge_or_exhaust` (`runs/service.py:43`) is the wire Phase 0 left
+unconnected: `would_exhaust()` *reported* which dimension breaks,
+`machine.transition()` *knew how* to terminate with a reason, and nothing
+called one from the other. The non-obvious part is that only `"deadline"`
+maps to `TIMED_OUT` (`runs/service.py:36`) — everything else maps to
+`BUDGET_EXHAUSTED` — so in a corpus of stopped Runs, "stalled" stays
+distinguishable from "did a lot of work". Exhaustion is checked *between*
+steps, never mid-step, so a Run stops cleanly rather than partway through.
+
+Note `result` is `null`: a Run that stopped produced no answer, and the
+response says so rather than returning a partial one.
+
+**Proof.** `tests/test_run_service.py:37`, `:47`, `:55` (*each dimension
+separately*) · `:63` (*a passed deadline maps to TIMED_OUT, not
+BUDGET_EXHAUSTED*) · `:77` (*never returns a Run missing a terminal reason*) ·
+`:188` (*stops between steps, not mid-step*) · `tests/test_api_runs.py:212`,
+`:235`.
+
+> **Known limitation:** `POST /runs`' budget override is caller-supplied and
+> not bounded by policy — a caller may currently ask for a larger budget
+> than their tenant should allow. Tracked in [the roadmap](roadmap.md).
+
 ## Not built yet
 
 So this page stays trustworthy, the things people most often assume exist:
 
 | Not built | Where it's tracked |
 |---|---|
-| Any V2 HTTP endpoint — no `POST /runs`, no gateway over HTTP | Roadmap Phases 1–2 |
-| Durable Run store / effect ledger (both in-memory) | Phases 1, 3 |
+| The capability gateway over HTTP — `POST /runs` is live, but no endpoint invokes a capability through it yet | Roadmap Phase 2 |
+| Durable effect ledger (in-memory; the Run store *is* durable as of Phase 1) | Phase 3 |
 | Real email, CRM, metrics or search providers (all mocks) | Phases 3–5 |
 | Delegation chain — on-behalf-of token, consent record, expiry | Seam named in [runs.md](design/runs.md), unpopulated |
 | Timer-driven Run timeout | See UC-16 |
