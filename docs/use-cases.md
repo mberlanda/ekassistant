@@ -601,7 +601,8 @@ tiny = create_run(IntakeRequest(..., budget=Budget(max_steps=2)), policy)
 rather than returning a bare boolean, so the terminal reason can say
 *which* budget ran out. `charge` does not enforce — enforcement is the
 caller's, checked separately — and `Run` is frozen, so every mutation
-returns a new instance.
+returns a new instance. Phase 1 is where that check stopped being every
+caller's problem: see [UC-23](#uc-23-a-budget-stops-a-run-between-steps-with-a-named-reason).
 
 **Proof.** `tests/test_capability_gateway.py:143`, `:155` (*denied attempts
 still consume budget*) · `tests/test_run_aggregate.py:46`, `:54`, `:63`,
