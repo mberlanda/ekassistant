@@ -76,6 +76,22 @@ label at all.
 Measured on crawled (composite-id) content, `llama3.2:1b`, same question,
 n=20 each: **2/20 grounded answers before, 11/20 after.**
 
+> **Open question on the system prompt, not the schema.** A later local
+> verification found that the *wording* of `SYSTEM_PROMPT` matters more
+> than the schema does, and that the two candidate wordings win on
+> different corpora. Against the markdown seed corpus the more explicit
+> "cite by bracketed number and nothing else, never a URL or filename"
+> phrasing produced **0/10, 0/10 and 1/8** cited answers, against
+> **6/12 and 7/12** for the terser wording now shipped; against crawled
+> composite-id content the ordering reverses (**2/10** vs **0/10**),
+> though that difference is small enough to be noise. The terser wording
+> is shipped because the seed corpus is the default path and its
+> regression was the larger, better-reproduced one — but this is one
+> question per corpus, which is not enough to settle it. The index
+> rendering itself is not in question: it beat the old `chunk_id` schema
+> **6/8 vs 3/8** under an identical prompt. See the `TESTED AND REJECTED`
+> block in `generation.py` for the raw numbers.
+
 Validation applied after the model responds, before returning to the
 caller:
 

@@ -23,22 +23,51 @@ from pydantic import ValidationError
 from ekassistant.models.context import ContextChunk
 from ekassistant.models.schema import Citation, GroundedAnswer, ModelResponse
 
+# Kept deliberately close to the pre-index wording. The only edits from the
+# contract this replaced are "chunk_id" -> "chunk number" and one sentence
+# introducing the bracket rendering. Resist expanding it: see the note below
+# on what a more explicit version measured.
 SYSTEM_PROMPT = (
     "You are an enterprise knowledge assistant. Answer the user's question "
     "using ONLY the provided context chunks. Each chunk is introduced by a "
     "number in square brackets, e.g. '[2]'. Every claim in your answer must "
-    "be supported by at least one cited chunk, and you cite a chunk by that "
-    "bracketed number and nothing else - never by URL, filename, or any "
-    "identifier that appears inside the chunk's own text. If the context "
-    "does not contain enough information to answer, set abstained to true, "
-    "leave answer empty, and cite nothing. Never cite a number that was not "
-    "shown in the context. Always also report a confidence score between "
-    "0.0 and 1.0 reflecting how well the provided context supports your "
-    "answer (1.0 = fully and directly supported, 0.0 = no support at all)."
+    "be supported by at least one cited chunk number from the context. If "
+    "the context does not contain enough information to answer, set "
+    "abstained to true, leave answer empty, and cite nothing. Never invent "
+    "a chunk number that is not present in the provided context. Always "
+    "also report a confidence score between 0.0 and 1.0 reflecting how well "
+    "the provided context supports your answer (1.0 = fully and directly "
+    "supported, 0.0 = no support at all)."
 )
 
 # TESTED AND REJECTED - do not re-add without measuring at n>=10:
 #
+#   - Spelling out the cite-by-number rule in SYSTEM_PROMPT: "you cite a
+#     chunk by that bracketed number and nothing else - never by URL,
+#     filename, or any identifier that appears inside the chunk's own text
+#     ... Never cite a number that was not shown in the context."
+#
+#     UNRESOLVED - the two wordings win on different corpora, and this
+#     needs more than one question per corpus before anyone calls it.
+#     llama3.2:1b, temperature 0.8 (the shipped default), same schema:
+#
+#       markdown seed corpus, "Does VPN access require MFA?"
+#         explicit wording   0/10, 0/10, 1/8
+#         wording kept above 6/12, 7/12
+#       crawled composite-id content, "What made the exploit possible?"
+#         explicit wording   2/10
+#         wording kept above 0/10
+#
+#     The markdown effect is large and reproduced three times; the crawled
+#     difference is 2 vs 0 and well inside noise, but crawled content is
+#     the case the index change was built for (see model-layer.md's 2/20
+#     -> 11/20). The wording above is kept because the seed corpus is the
+#     default path and its regression was the bigger, better-established
+#     one - NOT because the question is settled.
+#
+#     What IS settled: the index rendering itself is a clear win,
+#     independent of prompt (6/8 vs 3/8 against the old chunk_id schema
+#     under the same prompt). Only the prompt was ever in question.
 #   - Repeating the cite-by-number instruction at the end of the user
 #     message (a recency nudge, on top of SYSTEM_PROMPT). It looked like a
 #     win at n=3 (2/3 vs 0/3 for granite4.1:8b) and that reading was pure
