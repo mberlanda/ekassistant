@@ -98,7 +98,7 @@ def teardown_function():
 
 ANSWER_JSON = (
     '{"answer": "Yes, MFA is required.", '
-    '"citations": [{"chunk_id": "c1", "source": "policy.md"}], "abstained": false, '
+    '"citations": [{"index": 1}], "abstained": false, '
     '"confidence": 0.92}'
 )
 

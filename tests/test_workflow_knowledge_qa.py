@@ -54,7 +54,7 @@ def _params(**overrides) -> KnowledgeQaParams:
         keyword_index=FakeKeywordIndex(),
         reranker=PassthroughReranker(),
         chat_client=FakeChatClient(
-            '{"answer": "Yes.", "citations": [{"chunk_id": "c1", "source": "policy.md"}], '
+            '{"answer": "Yes.", "citations": [{"index": 1}], '
             '"abstained": false, "confidence": 0.9}'
         ),
     )

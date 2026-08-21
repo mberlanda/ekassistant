@@ -108,7 +108,7 @@ curl -s localhost:8000/query -H 'content-type: application/json' \
 | Groups for the caller | `src/ekassistant/identity/store.py` |
 | Two-stage pipeline: retrieve, then generate | `src/ekassistant/orchestration/pipeline.py:34` (`answer_question`) |
 | Hybrid search + fusion + rerank | `src/ekassistant/retrieval/retriever.py:47` (`retrieve`) → `rrf.py`, `reranker.py` |
-| Grounded generation, citations rebuilt from context | `src/ekassistant/models/generation.py:85` (`generate_answer`) |
+| Grounded generation, citations rebuilt from context | `src/ekassistant/models/generation.py:116` (`generate_answer`) |
 | One JSON line per call | `src/ekassistant/observability/tracing.py` (`record_run`) |
 
 > The keyword index is built inside the route handler's own function body,
@@ -118,6 +118,19 @@ curl -s localhost:8000/query -H 'content-type: application/json' \
 > refuses a connection used across threads. This was a real, reproduced
 > bug (16/20 concurrent requests failing). See
 > `tests/test_api_query.py:289`.
+
+> The model never sees a `chunk_id`. Context chunks are rendered with a
+> 1-based bracketed number (`generation.py:94`, `_format_context`) and the
+> model cites *that*; the real `chunk_id` and `source` are rebuilt from the
+> authoritative chunk afterwards. The reason is concrete: the crawler
+> produces composite ids like `<url>#<n>`, and a model asked for
+> `chunk_id` + `source` splits them along the obvious seam — `granite4.1:8b`
+> produced well-grounded answers that citation validation then discarded,
+> while `llama3.2:1b` only passed by echoing the opaque string verbatim. A
+> bare integer has no seam to split on, and being grammar-constrained to a
+> number it cannot carry a fabricated source at all. See
+> [model-layer.md](design/model-layer.md), which also records the prompt
+> variants that were **tested and rejected** at n≥10.
 
 **Proof.** `tests/test_api_query.py:89`, `tests/test_orchestration_pipeline.py`,
 `tests/test_retriever.py`, `tests/test_generation.py`.
@@ -179,8 +192,8 @@ counter:
 `empty_context` · `malformed_response` · `model_reported_abstain` ·
 `blank_answer` · `no_citations` · `invalid_citation`
 
-**Follow it.** `src/ekassistant/models/generation.py:37` (the `REASON_*`
-constants), `:107` (`_validate_citations`). The reasons are deliberately
+**Follow it.** `src/ekassistant/models/generation.py:57` (the `REASON_*`
+constants), `:138` (`_validate_citations`). The reasons are deliberately
 kept **out of the LLM-facing JSON schema** so they cannot confuse the
 model's constrained output.
 
@@ -771,7 +784,7 @@ key rather than a post-filter, so a caller that forgets to pass it gets
 nothing rather than everything.
 
 **Proof.** `tests/test_api_runs.py:260` (*another principal's Run is 404, not
-403*) · `:253` · `tests/test_run_store_sqlite.py:112`, `:121` (*wrong tenant
+403*) · `:253` · `tests/test_run_store_sqlite.py:113`, `:122` (*wrong tenant
 returns nothing rather than everything*).
 
 ---
@@ -797,14 +810,14 @@ UC-1's note): it **never holds a connection across calls**, opening and
 closing one per method via `_session` (`:176`), which is what makes it safe
 to cache as an `lru_cache` singleton.
 
-**Proof.** `tests/test_run_store_sqlite.py:135` (*a second store instance over
-the same path sees the same data*) · `:38` (*round trip preserves every field
-group*) · `:145`, `:176` (*real OS threads, not a sequential loop*).
+**Proof.** `tests/test_run_store_sqlite.py:136` (*a second store instance over
+the same path sees the same data*) · `:39` (*round trip preserves every field
+group*) · `:146`, `:177` (*real OS threads, not a sequential loop*).
 
 > **Known limitation:** the optimistic-concurrency check compares
 > wall-clock `updated_at`, not a version token tied to what a caller
 > actually read, so two callers racing from the same stale snapshot can
-> both pass it. `tests/test_run_store_sqlite.py:88` asserts what the store
+> both pass it. `tests/test_run_store_sqlite.py:89` asserts what the store
 > genuinely promises ("no torn write") rather than a guarantee it does not
 > give. Documented in [runs.md](design/runs.md) and [the roadmap](roadmap.md).
 
