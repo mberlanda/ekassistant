@@ -240,7 +240,34 @@ live progress rather than a stale `RECEIVED` Run that quietly finished
 elsewhere.
 
 A step returning `ok=False` ends the Run at `FAILED_TERMINAL` with the
-step's own `detail` as the reason. `request_status` is honoured through
+step's own `detail` as the reason. A step that *raises* instead of returning
+is a different case, and the one that was easiest to get wrong: the driver
+catches it, records the failed step, halts the Run at `FAILED_RETRYABLE`
+with a reason naming the exception type, persists that, and re-raises
+wrapped in `StepExecutionFailed` carrying the persisted Run. Three
+properties matter and each is pinned by a test:
+
+- **The durable record never lies.** Before this was handled, an exception
+  left the Run at `RUNNING` with `terminal_reason=None` — indistinguishable
+  to a later `GET /runs/{id}` from a Run still legitimately in progress
+  that would in fact never finish. Every `store.save()` in the loop happens
+  *after* `step.execute()` returns, so an exception skipped all of them.
+- **The charge survives.** The step was attempted, so it is paid for.
+  Otherwise a step that reliably explodes is free, and a retry loop around
+  it never exhausts a budget.
+- **The exception *type* is recorded, never its message.** `terminal_reason`
+  and step `detail` are exposed through `RunResponse`; exception messages
+  are not curated for that audience — a database error echoes the query, an
+  HTTP error echoes the URL and sometimes the credentials in it. The type
+  tells an operator what class of thing broke, and the chained original
+  keeps the detail in the server log where it belongs.
+
+Re-raising rather than returning the halted Run is deliberate: an
+infrastructure failure must never be converted into a successful-looking
+outcome. `POST /runs` turns `StepExecutionFailed` into a 500 that carries
+the `run_id`, because the server genuinely did fail — but a bare 500 would
+leave the durable record the driver just wrote unreachable by the only
+caller who wants it. `request_status` is honoured through
 the real `transition()` function, which means it inherits the real
 transition table's restrictions — a step may ask for `FAILED_RETRYABLE` or
 an abort from `RUNNING` (both legal edges) but not yet `AWAITING_APPROVAL`

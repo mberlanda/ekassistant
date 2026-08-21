@@ -345,3 +345,86 @@ def test_concurrent_run_creation_does_not_hit_cross_thread_sqlite_errors(tmp_pat
     assert all(r.status_code == 201 for r in responses), [r.status_code for r in responses]
     run_ids = {r.json()["run"]["run_id"] for r in responses}
     assert len(run_ids) == 20
+
+
+# -- an infrastructure failure mid-run ----------------------------------
+
+_BODY = {
+    "purpose": "knowledge_qa",
+    "task_type": "knowledge_qa",
+    "input": {"question": "does the VPN need MFA?"},
+}
+
+
+
+class ExplodingOllamaClient:
+    """Stands in for Ollama being down mid-request. Neither
+    OllamaClient nor orchestration/pipeline.py catches transport errors,
+    so this is what a real outage looks like to the route.
+    """
+
+    def embed(self, text: str) -> list[float]:
+        return [0.1, 0.2]
+
+    def chat_json(self, system, user, json_schema, temperature):
+        raise ConnectionError("ollama unreachable")
+
+
+def _explode(monkeypatch, tmp_path):
+    app.dependency_overrides[get_ollama_client] = lambda: ExplodingOllamaClient()
+    app.dependency_overrides[get_vector_index] = lambda: FakeVectorIndex([_hit("c1")])
+    app.dependency_overrides[get_reranker] = lambda: PassthroughReranker()
+    monkeypatch.setattr(
+        "ekassistant.api.main.get_keyword_index", lambda: _real_keyword_index(tmp_path)
+    )
+
+
+def test_a_provider_outage_does_not_leave_the_run_stuck_at_running(tmp_path, monkeypatch):
+    # Regression: the Run used to stay durably at RUNNING with no reason,
+    # indistinguishable from one still in progress that would never finish.
+    _explode(monkeypatch, tmp_path)
+    client = TestClient(app, raise_server_exceptions=False)
+
+    client.post("/runs", json=_BODY, headers={"X-User-Id": "alice"})
+
+    stored = get_run_store().list_for_principal("acme", "alice")
+    assert [r.status.value for r in stored] == ["FAILED_RETRYABLE"]
+    assert stored[0].terminal_reason is not None
+
+
+def test_a_provider_outage_returns_the_run_id_so_the_record_is_reachable(tmp_path, monkeypatch):
+    # A bare 500 makes the durable record the driver just wrote unreachable
+    # by the only caller who wants it.
+    _explode(monkeypatch, tmp_path)
+    client = TestClient(app, raise_server_exceptions=False)
+
+    response = client.post("/runs", json=_BODY, headers={"X-User-Id": "alice"})
+
+    assert response.status_code == 500
+    detail = response.json()["detail"]
+    assert detail["status"] == "FAILED_RETRYABLE"
+
+    followed_up = client.get(f"/runs/{detail['run_id']}", headers={"X-User-Id": "alice"})
+    assert followed_up.status_code == 200
+    assert followed_up.json()["status"] == "FAILED_RETRYABLE"
+
+
+def test_a_provider_outage_still_charges_the_attempted_step(tmp_path, monkeypatch):
+    _explode(monkeypatch, tmp_path)
+    client = TestClient(app, raise_server_exceptions=False)
+
+    client.post("/runs", json=_BODY, headers={"X-User-Id": "alice"})
+
+    assert get_run_store().list_for_principal("acme", "alice")[0].spend.steps == 1
+
+
+def test_a_provider_outage_leaks_no_answer_content_or_error_message(tmp_path, monkeypatch):
+    _explode(monkeypatch, tmp_path)
+    client = TestClient(app, raise_server_exceptions=False)
+
+    response = client.post("/runs", json=_BODY, headers={"X-User-Id": "alice"})
+    run_id = response.json()["detail"]["run_id"]
+    body = client.get(f"/runs/{run_id}", headers={"X-User-Id": "alice"}).text
+
+    assert "ollama unreachable" not in body
+    assert "ConnectionError" in body  # the type is useful; the message is not

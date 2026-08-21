@@ -116,7 +116,16 @@ closed them; see the Phase 1 Done row above for how each was verified.
   is Phase 2's explicit deliverable, not something Phase 1 was scoped to
   do.
 - New from Phase 1, not inherited: `POST /runs`' budget override is
-  caller-supplied and not policy-bounded (see the Phase 1 row); and
+  caller-supplied and not policy-bounded (see the Phase 1 row). Framed as
+  a cost gap, but review found it is also a **safety** gap the moment
+  Phase 2 lands: "denied capability attempts still consume budget" is what
+  stops a model looping on a forbidden tool, and today the same caller who
+  would be looping can set `max_steps` arbitrarily high. It cannot widen
+  authority — `approved_scopes`, `allowed_zones` and
+  `classification_ceiling` stay fixed by intake, verified — so it buys
+  attempts, never permissions, and it is unreachable until a workflow
+  actually calls `ctx.gateway`. Phase 2 must bound it against tenant
+  policy before wiring the first gateway-calling workflow. And
   `runs/service.py::execute_workflow` only supports a step requesting a
   status transition that is legal directly from `RUNNING` — Phase 3's
   approval-bearing email workflow will need it extended to run steps in

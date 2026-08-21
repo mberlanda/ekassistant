@@ -8,9 +8,10 @@ import pytest
 from ekassistant.capabilities.contracts import Zone
 from ekassistant.index.types import SearchResult
 from ekassistant.retrieval.reranker import PassthroughReranker
-from ekassistant.runs.aggregate import Run
-from ekassistant.runs.service import execute_workflow
+from ekassistant.runs.aggregate import Run, RunStatus
+from ekassistant.runs.service import StepExecutionFailed, execute_workflow
 from ekassistant.runs.store import InMemoryRunStore
+from ekassistant.workflows.base import WorkflowContext
 from ekassistant.workflows.knowledge_qa import KnowledgeQaParams, KnowledgeQaWorkflow
 
 
@@ -147,12 +148,34 @@ def test_infrastructure_failure_propagates_rather_than_a_false_abstain():
         def chat_json(self, system, user, json_schema, temperature):
             raise ConnectionError("ollama is not reachable")
 
+    workflow = KnowledgeQaWorkflow().bind(_params(chat_client=RaisingChatClient()))
+    step = workflow.steps()[0]
+
+    # The step itself: raises, rather than returning ok=True with an
+    # abstain. This is the property that must never regress.
+    with pytest.raises(ConnectionError):
+        step.execute(WorkflowContext(run=make_run(), gateway=None, ledger=None))
+
+
+def test_the_driver_halts_the_run_rather_than_letting_the_error_escape_untracked():
+    # execute_workflow wraps the same failure in StepExecutionFailed so
+    # the Run is persisted at FAILED_RETRYABLE instead of stranded at
+    # RUNNING - see tests/test_run_service.py. The original error is
+    # chained, not swallowed: the "no false abstain" property above still
+    # holds one layer up.
+    class RaisingChatClient:
+        def chat_json(self, system, user, json_schema, temperature):
+            raise ConnectionError("ollama is not reachable")
+
     store = InMemoryRunStore()
     run = store.create(make_run())
     workflow = KnowledgeQaWorkflow().bind(_params(chat_client=RaisingChatClient()))
 
-    with pytest.raises(ConnectionError):
+    with pytest.raises(StepExecutionFailed) as caught:
         execute_workflow(run, workflow, store, gateway=None, ledger=None)
+
+    assert isinstance(caught.value.__cause__, ConnectionError)
+    assert store.get(run.run_id).status is RunStatus.FAILED_RETRYABLE
 
 
 # -- capability-scope deny path (new with this workflow) ----------------

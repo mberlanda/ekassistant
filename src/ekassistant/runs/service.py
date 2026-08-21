@@ -20,12 +20,38 @@ persisting via `RunStore` after every transition so a concurrent
 that silently finished elsewhere.
 """
 
+import time
+
 from ekassistant.capabilities.effects import EffectLedger
 from ekassistant.capabilities.gateway import CapabilityGateway
 from ekassistant.runs.aggregate import Run, RunStatus, StepResult
 from ekassistant.runs.machine import is_terminal, transition
 from ekassistant.runs.store import RunStore
 from ekassistant.workflows.base import Workflow, WorkflowContext, check_sufficiency
+
+
+class StepExecutionFailed(Exception):
+    """A workflow step raised instead of returning a StepOutcome.
+
+    Carries the Run *as persisted* - halted at FAILED_RETRYABLE, with the
+    charge for the attempted step intact - so a caller can tell the
+    requester which run_id to poll instead of losing the record behind a
+    bare 500.
+
+    The original exception is chained (`raise ... from exc`) rather than
+    swallowed: an infrastructure failure must never be converted into a
+    successful-looking outcome, which is the same property
+    `test_infrastructure_failure_propagates_rather_than_a_false_abstain`
+    asserts one layer down. What changes here is only that the *durable
+    record* stops lying about it.
+    """
+
+    def __init__(self, run: Run, step_name: str, cause: BaseException):
+        self.run = run
+        self.step_name = step_name
+        self.cause = cause
+        super().__init__(f"step {step_name!r} raised {type(cause).__name__}")
+
 
 #: `Run.would_exhaust()`'s dimension names that map to TIMED_OUT rather
 #: than the default BUDGET_EXHAUSTED. Only "deadline" does: a Run that
@@ -70,6 +96,30 @@ def charge_or_exhaust(
             f"{dimension} exhausted before charging steps={steps} tokens={tokens} "
             f"spend_micros={spend_micros}"
         ),
+    )
+
+
+def _failure_detail(exc: BaseException) -> str:
+    """The exception *type*, never its message.
+
+    `terminal_reason` and step details are exposed through the Run record,
+    which is widely read (status polling, audit, operations). Exception
+    messages are not curated for that audience - a database error echoes
+    the query, an HTTP error echoes the URL and sometimes its credentials.
+    The type is enough to tell an operator what class of thing broke; the
+    message belongs in the server log, where the chained exception puts it.
+    """
+    return f"{type(exc).__name__} raised during execution"
+
+
+def _step_result(step, *, ok: bool, detail: str | None, started_at: float) -> StepResult:
+    return StepResult(
+        step_name=step.spec.name,
+        contract_ref=None,
+        ok=ok,
+        detail=detail,
+        started_at=started_at,
+        duration_ms=(time.time() - started_at) * 1000,
     )
 
 
@@ -130,17 +180,35 @@ def execute_workflow(
         if is_terminal(run):
             return store.save(run)
 
-        outcome = step.execute(WorkflowContext(run=run, gateway=gateway, ledger=ledger))
+        started_at = time.time()
+        try:
+            outcome = step.execute(WorkflowContext(run=run, gateway=gateway, ledger=ledger))
+        except Exception as exc:
+            # A step that raises used to leave the Run durably stuck at
+            # RUNNING with no terminal_reason and the step's budget charge
+            # discarded - indistinguishable, to a later GET, from a Run
+            # still legitimately in progress. Propagating an infrastructure
+            # error rather than faking an abstain is right; letting the
+            # durable record disagree with reality is not.
+            #
+            # FAILED_RETRYABLE is exactly the vocabulary for this: a halt,
+            # not a terminal state, and the resume point ADR-0011 describes
+            # for a transient provider error.
+            halted = run.with_step(
+                _step_result(step, ok=False, detail=_failure_detail(exc), started_at=started_at)
+            )
+            halted = transition(
+                halted,
+                RunStatus.FAILED_RETRYABLE,
+                reason=f"step {step.spec.name!r} raised {type(exc).__name__}",
+            )
+            raise StepExecutionFailed(store.save(halted), step.spec.name, exc) from exc
+
         run = outcome.run
         if outcome.evidence_refs:
             run = run.with_evidence(*outcome.evidence_refs)
         run = run.with_step(
-            StepResult(
-                step_name=step.spec.name,
-                contract_ref=None,
-                ok=outcome.ok,
-                detail=outcome.detail,
-            )
+            _step_result(step, ok=outcome.ok, detail=outcome.detail, started_at=started_at)
         )
 
         if not outcome.ok:

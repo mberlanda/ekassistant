@@ -14,7 +14,11 @@ import pytest
 from ekassistant.capabilities.contracts import Zone
 from ekassistant.runs.aggregate import Budget, RunStatus
 from ekassistant.runs.machine import InvalidTransition, transition
-from ekassistant.runs.service import charge_or_exhaust, execute_workflow
+from ekassistant.runs.service import (
+    StepExecutionFailed,
+    charge_or_exhaust,
+    execute_workflow,
+)
 from ekassistant.runs.store import InMemoryRunStore
 from ekassistant.workflows.base import StepOutcome, StepSpec
 
@@ -247,3 +251,153 @@ def test_a_requested_pause_stops_the_run_before_later_steps(make_run, gateway, l
     assert final.terminal_reason == "provider timeout, safe to retry"
     assert step1.executed
     assert not step2.executed
+
+
+# -- a step that raises rather than returning an outcome ----------------
+#
+# Regression: before this was handled, an exception out of step.execute()
+# left the Run durably at RUNNING with terminal_reason=None and the step's
+# budget charge discarded, because every store.save() in the loop happens
+# after execute() returns. A later GET could not tell that Run apart from
+# one still legitimately in progress.
+
+
+class ExplodingStep:
+    def __init__(self, name="boom", exc=None):
+        self.spec = StepSpec(name=name)
+        self._exc = exc or ConnectionError("provider unreachable at https://host/x?token=sekrit")
+
+    def execute(self, ctx):
+        raise self._exc
+
+
+def test_a_raising_step_halts_the_run_at_failed_retryable(make_run, gateway, ledger):
+    store = InMemoryRunStore()
+    run = store.create(make_run())
+    workflow = FakeWorkflow([ExplodingStep()])
+
+    with pytest.raises(StepExecutionFailed) as caught:
+        execute_workflow(run, workflow, store, gateway, ledger)
+
+    assert caught.value.run.status is RunStatus.FAILED_RETRYABLE
+    assert caught.value.step_name == "boom"
+
+
+def test_the_halted_run_is_persisted_not_just_returned(make_run, gateway, ledger):
+    # The whole point: a caller who never sees the exception must still be
+    # able to read the true status back out of the store.
+    store = InMemoryRunStore()
+    run = store.create(make_run())
+
+    with pytest.raises(StepExecutionFailed):
+        execute_workflow(run, FakeWorkflow([ExplodingStep()]), store, gateway, ledger)
+
+    assert store.get(run.run_id).status is RunStatus.FAILED_RETRYABLE
+
+
+def test_the_halt_carries_a_reason_naming_the_exception_type(make_run, gateway, ledger):
+    store = InMemoryRunStore()
+    run = store.create(make_run())
+
+    with pytest.raises(StepExecutionFailed):
+        execute_workflow(run, FakeWorkflow([ExplodingStep()]), store, gateway, ledger)
+
+    reason = store.get(run.run_id).terminal_reason
+    assert "ConnectionError" in reason
+    assert "boom" in reason
+
+
+def test_the_exception_message_is_never_copied_into_the_run_record(make_run, gateway, ledger):
+    # terminal_reason and step detail are exposed through RunResponse, and
+    # exception messages are not curated for that audience - this one
+    # carries a URL and a token. The type is recorded; the message is not.
+    store = InMemoryRunStore()
+    run = store.create(make_run())
+
+    with pytest.raises(StepExecutionFailed):
+        execute_workflow(run, FakeWorkflow([ExplodingStep()]), store, gateway, ledger)
+
+    halted = store.get(run.run_id)
+    recorded = f"{halted.terminal_reason} {halted.step_results[-1].detail}"
+    assert "sekrit" not in recorded
+    assert "https://host" not in recorded
+    assert "ConnectionError" in recorded
+
+
+def test_the_charge_for_the_attempted_step_survives(make_run, gateway, ledger):
+    # Otherwise a step that reliably explodes is free, and a retry loop
+    # around it never exhausts a budget.
+    store = InMemoryRunStore()
+    run = store.create(make_run())
+
+    with pytest.raises(StepExecutionFailed):
+        execute_workflow(run, FakeWorkflow([ExplodingStep()]), store, gateway, ledger)
+
+    assert store.get(run.run_id).spend.steps == 1
+
+
+def test_the_failed_step_is_recorded_as_a_step_result(make_run, gateway, ledger):
+    store = InMemoryRunStore()
+    run = store.create(make_run())
+
+    with pytest.raises(StepExecutionFailed):
+        execute_workflow(run, FakeWorkflow([ExplodingStep()]), store, gateway, ledger)
+
+    result = store.get(run.run_id).step_results[-1]
+    assert result.step_name == "boom"
+    assert result.ok is False
+
+
+def test_the_original_exception_is_chained_not_swallowed(make_run, gateway, ledger):
+    # An infrastructure failure must stay diagnosable in the server log.
+    store = InMemoryRunStore()
+    run = store.create(make_run())
+    original = TimeoutError("upstream timed out")
+
+    with pytest.raises(StepExecutionFailed) as caught:
+        execute_workflow(
+            run, FakeWorkflow([ExplodingStep(exc=original)]), store, gateway, ledger
+        )
+
+    assert caught.value.__cause__ is original
+    assert caught.value.cause is original
+
+
+def test_a_later_step_never_runs_after_one_raises(make_run, gateway, ledger):
+    store = InMemoryRunStore()
+    run = store.create(make_run())
+    later = RecordingStep("later")
+
+    with pytest.raises(StepExecutionFailed):
+        execute_workflow(
+            run, FakeWorkflow([ExplodingStep(), later]), store, gateway, ledger
+        )
+
+    assert later.executed is False
+
+
+# -- step timing --------------------------------------------------------
+
+
+def test_a_successful_step_records_real_timing(make_run, gateway, ledger):
+    # StepResult.started_at/duration_ms were left at their 0.0 defaults by
+    # the only driver that produces them, which made "operational
+    # measurement" in runs.md a claim with nothing behind it.
+    store = InMemoryRunStore()
+    run = store.create(make_run())
+
+    final = execute_workflow(run, FakeWorkflow([RecordingStep("draft")]), store, gateway, ledger)
+
+    result = final.step_results[-1]
+    assert result.started_at > 0.0
+    assert result.duration_ms >= 0.0
+
+
+def test_a_raising_step_still_records_timing(make_run, gateway, ledger):
+    store = InMemoryRunStore()
+    run = store.create(make_run())
+
+    with pytest.raises(StepExecutionFailed):
+        execute_workflow(run, FakeWorkflow([ExplodingStep()]), store, gateway, ledger)
+
+    assert store.get(run.run_id).step_results[-1].started_at > 0.0

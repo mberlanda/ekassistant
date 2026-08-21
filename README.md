@@ -74,7 +74,7 @@ docs/
   design/                 low-level designs — the *how*, per component
   glossary.md             every abbreviation, defined once
   roadmap.md              what's built vs. designed-only, PR by PR
-  use-cases.md            23 real behaviours -> entry point, code path, tests, how to run
+  use-cases.md            24 real behaviours -> entry point, code path, tests, how to run
 seed_corpus/              tiny hand-authored fixture corpus (.md/.html/.pdf/.docx)
 src/ekassistant/          application code, one subpackage per component
   config/                 settings (env-driven)

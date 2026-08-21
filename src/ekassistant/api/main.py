@@ -36,7 +36,7 @@ from ekassistant.policy.engine import ScopePolicyEngine
 from ekassistant.retrieval.reranker import PassthroughReranker
 from ekassistant.runs.aggregate import Budget, Run, RunStatus
 from ekassistant.runs.intake import IntakeRejected, IntakeRequest, create_run
-from ekassistant.runs.service import execute_workflow
+from ekassistant.runs.service import StepExecutionFailed, execute_workflow
 from ekassistant.runs.sqlite_store import SqliteRunStore
 from ekassistant.runs.store import RunNotFound
 from ekassistant.workflows.knowledge_qa import KnowledgeQaParams, KnowledgeQaWorkflow
@@ -491,7 +491,22 @@ def create_run_route(
         )
     )
 
-    final_run = execute_workflow(run, workflow, run_store, gateway, ledger)
+    try:
+        final_run = execute_workflow(run, workflow, run_store, gateway, ledger)
+    except StepExecutionFailed as exc:
+        # The Run is already persisted at FAILED_RETRYABLE by the driver.
+        # This stays a 500 - the server genuinely failed, and guessing at
+        # 503 would be claiming a diagnosis this layer cannot make - but it
+        # carries the run_id, without which the durable record the driver
+        # just wrote is unreachable by the only caller who wants it.
+        raise HTTPException(
+            status_code=500,
+            detail={
+                "error": "workflow step failed",
+                "run_id": exc.run.run_id,
+                "status": exc.run.status.value,
+            },
+        ) from exc
 
     result = None
     step_result = workflow.steps()[0].result

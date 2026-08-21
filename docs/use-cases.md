@@ -52,6 +52,7 @@ confusing thing about the repo right now:
 | [UC-21](#uc-21-someone-elses-run-is-404-never-403) | Someone else's Run is 404, never 403 | HTTP | V2 runs |
 | [UC-22](#uc-22-a-run-outlives-the-process-that-created-it) | A Run outlives the process that created it | HTTP | V2 durability |
 | [UC-23](#uc-23-a-budget-stops-a-run-between-steps-with-a-named-reason) | A budget stops a Run between steps, with a named reason | HTTP | V2 runs |
+| [UC-24](#uc-24-a-provider-outage-does-not-strand-a-run) | A provider outage doesn't strand a Run | HTTP | V2 durability |
 
 **Two minutes of setup** covers UC-1 through UC-6:
 
@@ -103,7 +104,7 @@ curl -s localhost:8000/query -H 'content-type: application/json' \
 
 | Step | Code |
 |---|---|
-| Route, identity resolution, keyword index constructed *inside the handler body* | `src/ekassistant/api/main.py:103` (`query`) |
+| Route, identity resolution, keyword index constructed *inside the handler body* | `src/ekassistant/api/main.py:158` (`query`) |
 | Groups for the caller | `src/ekassistant/identity/store.py` |
 | Two-stage pipeline: retrieve, then generate | `src/ekassistant/orchestration/pipeline.py:34` (`answer_question`) |
 | Hybrid search + fusion + rerank | `src/ekassistant/retrieval/retriever.py:47` (`retrieve`) → `rrf.py`, `reranker.py` |
@@ -706,15 +707,15 @@ not widen it just because there is now somewhere to persist things.
 
 The path: `create_run_route` (`api/main.py:392`) validates input *before*
 `run_store.create()` — so a 400 or 422 leaves no orphaned `RECEIVED` Run —
-then `execute_workflow` (`runs/service.py:76`) drives
+then `execute_workflow` (`runs/service.py:126`) drives
 `RECEIVED → PLANNED → RUNNING → VALIDATING → COMPLETED`, saving after every
 transition so a concurrent `GET` sees live progress rather than a stale
 `RECEIVED` Run that silently finished elsewhere.
 
 **Proof.** `tests/test_api_runs.py:289` (*completes and is returned once*) ·
 `:317` (*20 genuinely concurrent requests, real threads*) ·
-`tests/test_workflow_knowledge_qa.py:109`, `:124` (*an abstain still
-completes the Run*), `:140` (*infrastructure failure propagates rather than
+`tests/test_workflow_knowledge_qa.py:110`, `:125` (*an abstain still
+completes the Run*), `:141` (*infrastructure failure propagates rather than
 faking an abstain*).
 
 ---
@@ -736,8 +737,8 @@ Two things worth noticing. First, this is **201, not 403** — the refusal
 an HTTP error with nothing behind it. An HTTP error is reserved for
 requests where no valid Run could be created at all (unknown purpose → 403,
 unregistered task type → 400, missing input → 422). Second, the check is
-`check_sufficiency` (`workflows/base.py:115`), called by `execute_workflow`
-*before* anything is charged or attempted (`runs/service.py:120`): a Run
+`check_sufficiency` (`workflows/base.py:124`), called by `execute_workflow`
+*before* anything is charged or attempted (`runs/service.py:170`): a Run
 that would be denied on its third step should never have run the first two.
 
 This also gives `kb.documents.read` its first real teeth. The scope has
@@ -745,8 +746,8 @@ been in `config/policies.yaml` since Phase 0 and was checked by nothing —
 it is now enforced ahead of V1's per-chunk ACL filter, which still runs
 underneath (UC-2). Two independent layers, not one moved.
 
-**Proof.** `tests/test_api_runs.py:184` · `tests/test_workflow_knowledge_qa.py:161` ·
-`tests/test_run_service.py:172` (*rejects before running anything*).
+**Proof.** `tests/test_api_runs.py:184` · `tests/test_workflow_knowledge_qa.py:184` ·
+`tests/test_run_service.py:176` (*rejects before running anything*).
 
 ---
 
@@ -764,7 +765,7 @@ A 403 would confirm the `run_id` exists and is merely not yours — which is
 itself information a caller with no legitimate access should not get. This
 is the same reasoning as UC-2's "no leakage" denial, applied to Run
 identifiers instead of document content. `get_run_route`
-(`api/main.py:514`) checks `tenant_id` *and* `principal_id`, and the store's
+(`api/main.py:529`) checks `tenant_id` *and* `principal_id`, and the store's
 `list_for_principal` (`runs/sqlite_store.py:238`) makes tenant part of the
 key rather than a post-filter, so a caller that forgets to pass it gets
 nothing rather than everything.
@@ -822,11 +823,11 @@ curl -s localhost:8000/runs -H 'X-User-Id: alice' -H 'Content-Type: application/
 # "BUDGET_EXHAUSTED"  "max_steps exhausted before charging steps=1 ..."  null
 ```
 
-`charge_or_exhaust` (`runs/service.py:43`) is the wire Phase 0 left
+`charge_or_exhaust` (`runs/service.py:69`) is the wire Phase 0 left
 unconnected: `would_exhaust()` *reported* which dimension breaks,
 `machine.transition()` *knew how* to terminate with a reason, and nothing
 called one from the other. The non-obvious part is that only `"deadline"`
-maps to `TIMED_OUT` (`runs/service.py:36`) — everything else maps to
+maps to `TIMED_OUT` (`runs/service.py:62`) — everything else maps to
 `BUDGET_EXHAUSTED` — so in a corpus of stopped Runs, "stalled" stays
 distinguishable from "did a lot of work". Exhaustion is checked *between*
 steps, never mid-step, so a Run stops cleanly rather than partway through.
@@ -834,15 +835,66 @@ steps, never mid-step, so a Run stops cleanly rather than partway through.
 Note `result` is `null`: a Run that stopped produced no answer, and the
 response says so rather than returning a partial one.
 
-**Proof.** `tests/test_run_service.py:37`, `:47`, `:55` (*each dimension
-separately*) · `:63` (*a passed deadline maps to TIMED_OUT, not
-BUDGET_EXHAUSTED*) · `:77` (*never returns a Run missing a terminal reason*) ·
-`:188` (*stops between steps, not mid-step*) · `tests/test_api_runs.py:212`,
+**Proof.** `tests/test_run_service.py:41`, `:51`, `:59` (*each dimension
+separately*) · `:67` (*a passed deadline maps to TIMED_OUT, not
+BUDGET_EXHAUSTED*) · `:81` (*never returns a Run missing a terminal reason*) ·
+`:192` (*stops between steps, not mid-step*) · `tests/test_api_runs.py:212`,
 `:235`.
 
 > **Known limitation:** `POST /runs`' budget override is caller-supplied and
 > not bounded by policy — a caller may currently ask for a larger budget
 > than their tenant should allow. Tracked in [the roadmap](roadmap.md).
+
+---
+
+## UC-24: A provider outage does not strand a Run
+
+**What happens.** Ollama goes down mid-request. The Run does **not** sit at
+`RUNNING` forever pretending to be in progress — it halts at
+`FAILED_RETRYABLE`, keeps the charge for the step it attempted, and the
+caller still gets the `run_id`.
+
+```bash
+# with Ollama stopped:
+curl -s -i localhost:8000/runs -H 'X-User-Id: alice' -H 'Content-Type: application/json' \
+  -d '{"purpose":"knowledge_qa","task_type":"knowledge_qa","input":{"question":"anything"}}'
+# HTTP/1.1 500
+# {"detail":{"error":"workflow step failed","run_id":"run_...","status":"FAILED_RETRYABLE"}}
+
+curl -s localhost:8000/runs/run_... -H 'X-User-Id: alice' | jq '.status, .terminal_reason, .spend.steps'
+# "FAILED_RETRYABLE"   "step 'answer_question' raised ConnectionError"   1
+```
+
+This is a **fixed bug**, found by review rather than by tests, and worth
+keeping visible because the failure mode was invisible by construction.
+Every `store.save()` in `execute_workflow`'s loop happens *after*
+`step.execute()` returns, so an exception skipped all of them: the Run
+stayed durably at `RUNNING` with `terminal_reason` null and `spend.steps`
+at 0 — indistinguishable, to any later `GET`, from a Run still legitimately
+running that would in fact never finish again.
+
+Three properties, each pinned by its own test:
+
+| Property | Why it matters |
+|---|---|
+| The Run halts at `FAILED_RETRYABLE` (`runs/service.py:33`) | A *halt*, not a terminal state — [runs.md](design/runs.md) calls it the resume point. Treating an outage as terminal would mean recovering only by starting a new Run, discarding the checkpoint and effect ledger that make recovery safe |
+| The attempted step is still charged | Otherwise a step that reliably explodes is free, and a retry loop around it never exhausts a budget (UC-23) |
+| The exception **type** is recorded, never its message (`runs/service.py:102`) | `terminal_reason` is exposed through `RunResponse`. Exception messages are not written for that audience — a database error echoes the query, an HTTP error echoes the URL and sometimes the credentials in it |
+
+The error is re-raised rather than converted into a tidy 201: an
+infrastructure failure must never be dressed up as a successful outcome,
+which is the same property `knowledge_qa` maintains one layer down by
+refusing to turn a transport error into a false abstain. The route
+(`api/main.py:496`) keeps it a 500 — the server genuinely failed, and
+guessing at 503 would claim a diagnosis this layer cannot make — but
+attaches the `run_id`, without which the record just written is
+unreachable.
+
+**Proof.** `tests/test_api_runs.py:382` (*not stuck at RUNNING*) · `:395`
+(*run_id returned, record reachable*) · `:412` (*charge survives*) · `:421`
+(*no message or answer content leaks*) · `tests/test_run_service.py:274`,
+`:286`, `:310` (*the URL and token in the exception message never reach the
+Run record*), `:327`.
 
 ## Not built yet
 
