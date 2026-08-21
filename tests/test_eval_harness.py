@@ -144,7 +144,7 @@ def test_run_retrieval_checks_fails_when_acl_incorrectly_leaks_content():
 def test_measure_generation_reports_abstain_rate():
     responses = [
         '{"answer": "Yes.", '
-        '"citations": [{"chunk_id": "doc-a.md#0", "source": "doc-a.md"}], '
+        '"citations": [{"index": 1}], '
         '"abstained": false, "confidence": 0.75}',
         '{"answer": "", "citations": [], "abstained": true, "confidence": 0.1}',
     ]

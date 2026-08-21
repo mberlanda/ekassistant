@@ -89,7 +89,7 @@ def teardown_function():
 def test_query_returns_grounded_answer_with_citations(tmp_path, monkeypatch):
     response_json = (
         '{"answer": "Yes, MFA is required.", '
-        '"citations": [{"chunk_id": "c1", "source": "policy.md"}], "abstained": false, '
+        '"citations": [{"index": 1}], "abstained": false, '
         '"confidence": 0.92}'
     )
     _override(
@@ -130,7 +130,7 @@ def test_query_uses_the_configured_default_temperature_when_not_specified(
     tmp_path, monkeypatch
 ):
     response_json = (
-        '{"answer": "Yes.", "citations": [{"chunk_id": "c1", "source": "policy.md"}], '
+        '{"answer": "Yes.", "citations": [{"index": 1}], '
         '"abstained": false, "confidence": 0.5}'
     )
     ollama_client = FakeOllamaClient(response_json)
@@ -150,7 +150,7 @@ def test_query_uses_the_configured_default_temperature_when_not_specified(
 
 def test_query_temperature_override_is_passed_through(tmp_path, monkeypatch):
     response_json = (
-        '{"answer": "Yes.", "citations": [{"chunk_id": "c1", "source": "policy.md"}], '
+        '{"answer": "Yes.", "citations": [{"index": 1}], '
         '"abstained": false, "confidence": 0.5}'
     )
     ollama_client = FakeOllamaClient(response_json)
@@ -248,7 +248,7 @@ def test_query_reaches_the_real_keyword_index_via_its_direct_call(tmp_path, monk
     )
     real_index.close()
     response_json = (
-        '{"answer": "Yes.", "citations": [{"chunk_id": "c1", "source": "policy.md"}], '
+        '{"answer": "Yes.", "citations": [{"index": 1}], '
         '"abstained": false, "confidence": 0.5}'
     )
     _override(
