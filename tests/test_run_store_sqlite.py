@@ -4,6 +4,7 @@ rejects, plus survive genuine cross-thread/cross-connection concurrency,
 which the mock never has to.
 """
 
+import json
 import threading
 import time
 
@@ -221,3 +222,41 @@ def test_concurrent_saves_never_cross_thread_error_or_corrupt(store):
     # What must never happen is a value outside that range, which is what
     # a torn or duplicated write would produce.
     assert 1 <= final.spend.steps <= len(threads)
+
+
+# -- drift guard --------------------------------------------------------
+
+
+def test_every_run_field_is_persisted(store):
+    """A Run field that `_run_to_json` forgets is invisible until a
+    restart loses it.
+
+    `_run_to_json` enumerates fields by hand (deliberately - an explicit
+    schema beats `asdict()` for a record that has to survive a code
+    change). The cost of that choice is that adding a field to `Run` with
+    a default silently stops persisting it, and every round-trip test
+    still passes because they enumerate fields by hand too. This is the
+    one test that fails instead.
+    """
+    from dataclasses import fields
+
+    from ekassistant.runs.sqlite_store import _run_to_json
+
+    serialized = set(json.loads(_run_to_json(make_run())))
+    declared = {f.name for f in fields(Run)}
+
+    assert declared - serialized == set(), "Run fields not written to the store"
+    assert serialized - declared == set(), "store writes keys that are not Run fields"
+
+
+def test_a_field_added_to_the_blob_survives_the_round_trip(store):
+    # The mirror of the above: everything written is also read back, so
+    # the guard cannot be satisfied by writing a field that _run_from_json
+    # then drops on the floor.
+    from dataclasses import fields
+
+    original = store.create(make_run())
+    restored = store.get(original.run_id)
+
+    for f in fields(Run):
+        assert getattr(restored, f.name) == getattr(original, f.name), f.name
