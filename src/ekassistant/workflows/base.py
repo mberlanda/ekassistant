@@ -15,7 +15,7 @@ case they might.
 """
 
 from collections.abc import Sequence
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import Protocol
 
 from ekassistant.capabilities.contracts import Zone
@@ -66,10 +66,19 @@ class StepOutcome:
 
 @dataclass(frozen=True)
 class StepSpec:
-    """Declared metadata for one step, checked before a workflow runs."""
+    """Declared metadata for one step, checked before a workflow runs.
+
+    Deliberately just a name. An earlier version also carried a
+    `uses_contracts` tuple, which nothing read: the gateway binds a step
+    to a contract at `invoke()` time and checks authority there, so a
+    declared-but-unchecked list of contracts looked like a control while
+    being inert - worse than not having one. A pre-flight check that a
+    step's contracts exist and are permitted by the Run belongs with the
+    phase that first routes a step through the gateway, where it can be
+    validated against a real registry.
+    """
 
     name: str
-    uses_contracts: tuple[str, ...] = field(default=())
 
 
 class WorkflowStep(Protocol):

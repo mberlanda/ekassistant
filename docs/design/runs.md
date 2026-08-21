@@ -3,12 +3,21 @@
 Reference spine item c, at V2 scope. Where
 [orchestration.md](orchestration.md) describes V1's single-shot question
 pipeline, this describes the durable execution object that V2 workflows run
-inside. Both exist: V1's pipeline keeps working and becomes one task
-template among several in Phase 1.
+inside. Both exist: V1's pipeline keeps working, unchanged, and
+`knowledge_qa` (Phase 1) is one task template that happens to call it
+internally rather than a replacement for it.
 
 See [ADR-0011](../decisions/0011-durable-run-aggregate.md) for why a Run
 exists at all, and [ADR-0014](../decisions/0014-deterministic-workflow-templates.md)
 for why workflows are templates rather than a planner loop.
+
+**Status:** the record, intake, the state machine and budgets described
+below are built and tested since Phase 0. Persistence (`SqliteRunStore`)
+and the workflow-execution driver (`runs/service.py`, which is what
+actually wires budgets to transitions) are built as of Phase 1, along with
+the first real template, `knowledge_qa`. Still designed-only: the effect
+ledger's durable store (Phase 3), a timer service for `deadline_ts`
+(nothing yet), and the `delegation_ref` seam.
 
 ## The record
 
@@ -125,6 +134,24 @@ reset the clock on every resume.
 Denied capability attempts still consume budget. A model looping on a
 forbidden tool must run out rather than loop for free.
 
+**Wired to transitions since Phase 1** (`runs/service.py`'s
+`charge_or_exhaust()`): Phase 0 shipped `would_exhaust()` (reports) and the
+state machine's terminal-state-with-reason vocabulary (enforces), but
+nothing called one from the other, so a Run that exhausted its budget kept
+being handed to the next step anyway. `charge_or_exhaust()` is the missing
+call: it charges when the budget allows it, and otherwise transitions the
+Run to a terminal state with a reason naming the exhausted dimension. One
+mapping choice is not obvious from `would_exhaust()`'s return value alone:
+its "deadline" dimension routes to `TIMED_OUT`, every other dimension
+(`max_steps`, `max_tokens`, `max_spend_micros`) routes to
+`BUDGET_EXHAUSTED` — both are legitimate terminal reasons and a corpus of
+stopped Runs needs "stalled" distinguishable from "did a lot of work".
+`runs/service.py::execute_workflow()` calls `charge_or_exhaust()` once
+before every workflow step, so a step's own capability calls (which share
+the same `spend.steps` counter via `gateway.invoke()`) are caught by the
+*next* step's pre-check rather than needing a second enforcement path for
+"tool calls" specifically.
+
 ## Persistence
 
 `RunStore` is a four-method Protocol — create, get, save, list. Small on
@@ -142,7 +169,40 @@ an in-flight step is how something unapproved gets committed.
 mock that accepted writes the real store would reject teaches callers the
 wrong contract.
 
-**Owed:** a durable SQLite implementation, Phase 1.
+**Built since Phase 1:** `runs/sqlite_store.py`'s `SqliteRunStore`
+implements the same Protocol and the same optimistic-concurrency contract
+(`ConcurrentRunUpdate` on a stale save or a duplicate create,
+`RunNotFound` on a missing get) — nothing InMemoryRunStore rejects is
+accepted here. The `save()` compare-and-swap is one `UPDATE ... WHERE
+updated_at <= ?` statement, not a read followed by a write, so two writers
+racing on the same stale copy cannot both observe "not stale yet" before
+either commits.
+
+Worth being precise about what that check actually guarantees, because it
+is easy to over-read: it compares wall-clock timestamps
+(`stored.updated_at <= incoming.updated_at`), not a version token tied to
+what the caller actually read. `charge()` always stamps the current time,
+and time only moves forward, so two callers that both read the same stale
+snapshot and then independently charge it can *both* legitimately pass
+this check — a real, inherited lost-update gap, not something introduced
+by the durable store (`InMemoryRunStore` has the identical comparison; see
+`test_run_store_sqlite.py`'s `test_concurrent_saves_never_cross_thread_error_or_corrupt`,
+which documents this rather than asserting a guarantee neither store
+actually gives). What the check *does* reliably catch is the scenario
+`test_save_rejects_a_stale_copy` pins for both stores: a caller holding
+onto an old copy for a while (an approval callback, say) saving over a
+newer one that landed in the meantime.
+
+The other thing worth knowing: unlike `SqliteKeywordIndex` (see
+[retrieval.md](retrieval.md) and PR #6's real, reproduced concurrency
+bug), `SqliteRunStore` does not need to be constructed inside a route
+handler's function body to be thread-safe. It never holds a sqlite3
+connection across calls — every method opens, uses and closes its own —
+so construction and use are always on the same thread regardless of which
+OS thread FastAPI's dependency resolution lands on. A `SqliteRunStore`
+instance is therefore safe to cache as a singleton
+(`api/main.py::get_run_store`, `@lru_cache`'d), which the keyword index is
+specifically not.
 
 ## Workflows
 
@@ -168,6 +228,141 @@ should never have started, especially once a reversible write has landed;
 and a user being told about one missing scope at a time cannot work out
 that the purpose was simply the wrong one.
 
+### The Run service (Phase 1): `runs/service.py`
+
+`execute_workflow(run, workflow, store, gateway, ledger)` is the generic
+driver every task template runs through: pre-flight `check_sufficiency()`,
+`RECEIVED → PLANNED → RUNNING`, then per step `charge_or_exhaust()` →
+`step.execute(ctx)` → persist, then `VALIDATING → COMPLETED` once every
+step has succeeded. Every transition is persisted via `store.save()`
+immediately, not batched at the end, so a concurrent `GET /runs/{id}` sees
+live progress rather than a stale `RECEIVED` Run that quietly finished
+elsewhere.
+
+A step returning `ok=False` ends the Run at `FAILED_TERMINAL` with the
+step's own `detail` as the reason. A step that *raises* instead of returning
+is a different case, and the one that was easiest to get wrong: the driver
+catches it, records the failed step, halts the Run at `FAILED_RETRYABLE`
+with a reason naming the exception type, persists that, and re-raises
+wrapped in `StepExecutionFailed` carrying the persisted Run. Three
+properties matter and each is pinned by a test:
+
+- **The durable record never lies.** Before this was handled, an exception
+  left the Run at `RUNNING` with `terminal_reason=None` — indistinguishable
+  to a later `GET /runs/{id}` from a Run still legitimately in progress
+  that would in fact never finish. Every `store.save()` in the loop happens
+  *after* `step.execute()` returns, so an exception skipped all of them.
+- **The charge survives.** The step was attempted, so it is paid for.
+  Otherwise a step that reliably explodes is free, and a retry loop around
+  it never exhausts a budget.
+- **The exception *type* is recorded, never its message.** `terminal_reason`
+  and step `detail` are exposed through `RunResponse`; exception messages
+  are not curated for that audience — a database error echoes the query, an
+  HTTP error echoes the URL and sometimes the credentials in it. The type
+  tells an operator what class of thing broke, and the chained original
+  keeps the detail in the server log where it belongs.
+
+Re-raising rather than returning the halted Run is deliberate: an
+infrastructure failure must never be converted into a successful-looking
+outcome. `POST /runs` turns `StepExecutionFailed` into a 500 that carries
+the `run_id`, because the server genuinely did fail — but a bare 500 would
+leave the durable record the driver just wrote unreachable by the only
+caller who wants it. `request_status` is honoured through
+the real `transition()` function, which means it inherits the real
+transition table's restrictions — a step may ask for `FAILED_RETRYABLE` or
+an abort from `RUNNING` (both legal edges) but not yet `AWAITING_APPROVAL`
+(only legal from `VALIDATING`), because every step in a `Workflow.steps()`
+list currently runs under one flat `RUNNING` phase. This is a known
+boundary, not an oversight: it is exactly enough for `knowledge_qa`, which
+never requests a status, and Phase 3's approval-bearing email workflow will
+need `execute_workflow` extended to run steps in two phases (work, then
+validate) before a step can legally ask for approval.
+
+### `knowledge_qa` (Phase 1): `workflows/knowledge_qa.py`
+
+Re-expresses V1's `answer_question()` as a `task_type` a Run can declare,
+rather than a special-cased endpoint. `orchestration/pipeline.py` is
+unchanged and `POST /query` still calls it directly — `knowledge_qa`'s one
+step calls the same function, so retrieval and generation behave
+identically either way; only the surrounding Run/workflow scaffolding is
+new.
+
+Two things about it are worth flagging because they read as
+inconsistent with the rest of this document at first glance:
+
+- **It does not call `ctx.gateway`.** A "pure" reading of `WorkflowStep`
+  would have every external touch go through a registered capability, but
+  retrieval and generation are not registered capabilities —
+  `capabilities/bootstrap.py`'s catalogue has no "search the knowledge
+  base" or "call the chat model" entry, and adding one is real, unplanned
+  work that belongs with Phase 2 ("Gateway live"), not this phase. ACL
+  enforcement continues to happen exactly where it always has — inside the
+  index adapters (ADR-0002) — never via the capability gateway.
+  `ctx.gateway`/`ctx.ledger` are still threaded through per
+  `WorkflowContext`'s shape, unused, so a future step that does need a
+  capability slots in without a signature change.
+- **The registry holds an unbound template; the API route calls `.bind()`
+  to get a request-scoped instance.** `WorkflowRegistry.register()` takes
+  one instance and `steps()` takes no arguments, but each request needs
+  its own question text and its own model/index clients — a shared
+  registry entry cannot hold per-request data, and a frozen one could not
+  hold it at all. The registered instance answers `task_type`/`version`
+  lookups and `check_sufficiency()` (which only needs the static
+  `required_zones`/`required_scopes`); `.bind(params)` returns a fresh
+  instance whose `steps()` actually runs. Calling `.steps()` on the
+  unbound template raises `RuntimeError` rather than returning something
+  broken silently.
+
+`required_scopes` names `kb.documents.read` — a scope `config/
+policies.yaml` already granted to `all-staff`/`engineering` before this
+workflow existed, but that nothing checked. `guest` holds neither, so a
+`guest` Run declaring `knowledge_qa` is refused by `check_sufficiency()`
+before a single retrieval call runs — a capability-scope deny path new
+with this workflow, additional to (not a replacement for) V1's per-chunk
+ACL enforcement, which `guest` also fails.
+
+**The answer is never persisted on the Run.** Consistent with "What a Run
+does not store" above: the `KnowledgeQaStep` keeps the full
+`PipelineResult` on itself (not on the Run), and `POST /runs`' HTTP
+response echoes it once to the caller who asked. `GET /runs/{id}` returns
+only the durable Run record — status, terminal reason, budget/spend, and
+`evidence_refs` (the retrieved chunk_ids, a reference, not the chunk text)
+— the same trust boundary V1's `/query` already draws around the answer
+text, just applied to a durable record with a wider read audience instead
+of a single response body.
+
+## API (Phase 1): `POST /runs`, `GET /runs/{id}`
+
+`api/main.py`, alongside `/query`/`/whoami`, not in place of them. Same
+mock identity resolution (`X-User-Id`, falling back to
+`settings.default_user`), same fail-closed shape.
+
+`POST /runs` never bypasses `runs/intake.py`: the route builds an
+`IntakeRequest` from the resolved principal/groups and the request's
+`purpose`/`task_type`, and `IntakeRejected` (unknown purpose, or a
+task_type the purpose does not cover) becomes an HTTP 403 — no Run is
+created. A workflow-level refusal is different and deliberately *not* an
+HTTP error: if intake succeeds but `check_sufficiency()` or a budget check
+later refuses (see `guest`'s missing `kb.documents.read` scope, above), a
+Run *was* created, so the route returns 201 with that Run's terminal
+status and reason — the refusal is the Run's own record, not a response
+code. An HTTP error is reserved for requests where no valid Run could be
+constructed or dispatched at all: an unknown `purpose`, a `task_type` no
+workflow is registered for (400), or missing task-specific input (422,
+e.g. `knowledge_qa` without `input.question`).
+
+`GET /runs/{id}` answers a cross-principal read with **404, never 403**.
+A 403 would confirm the run_id exists and simply belongs to someone else —
+itself information a caller with no legitimate access to that Run should
+not get. "Not yours" and "never existed" must be indistinguishable from
+the outside.
+
+The keyword-index construction rule from `/query` (build
+`SqliteKeywordIndex` inside the route handler's own function body, never
+through `Depends()`) carries over unchanged to `POST /runs`, for the same
+reason — see [api-gateway-identity.md](api-gateway-identity.md) and
+[retrieval.md](retrieval.md).
+
 ## Tradeoffs
 
 - **Immutable aggregate vs. mutable object.** Threading a returned Run
@@ -183,3 +378,19 @@ that the purpose was simply the wrong one.
   wrote it for. See
   [ADR-0014](../decisions/0014-deterministic-workflow-templates.md),
   including the graduation criteria that would change this.
+- **`POST /runs`' budget override is caller-supplied, not policy-bounded
+  (Phase 1).** Any caller can set their own `max_steps`/`max_tokens`/
+  `max_spend_micros`/deadline on a Run they create. It exists so budget
+  exhaustion — a required deny path for this phase — is reachable through
+  the real HTTP endpoint, not only through `runs/service.py`'s unit tests.
+  A real deployment would want this bounded by policy (a ceiling per
+  purpose or tenant, the same shape zones and scopes already have), not
+  trusted from the request body; that is a known gap, not an oversight.
+- **`Run.with_checkpoint` was removed in Phase 1, not built on.** Phase 0
+  added it as a seam with no caller; `runs/service.py`'s `execute_workflow`
+  does not need mid-workflow checkpointing yet (`knowledge_qa` runs to
+  completion synchronously within one call), so the setter was dead code
+  rather than a seam a real phase was using. The `checkpoint` field stays
+  on `Run` — it is still named in the schema this document describes —
+  but the accessor comes back when a phase actually resumes a Run from
+  one.

@@ -229,9 +229,6 @@ class Run:
     def with_step(self, result: StepResult) -> "Run":
         return self._touch(step_results=self.step_results + (result,))
 
-    def with_checkpoint(self, checkpoint: str) -> "Run":
-        return self._touch(checkpoint=checkpoint)
-
     def with_evidence(self, *refs: str) -> "Run":
         new = tuple(r for r in refs if r not in self.evidence_refs)
         return self._touch(evidence_refs=self.evidence_refs + new) if new else self
